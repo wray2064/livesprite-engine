@@ -1,0 +1,1332 @@
+LiveSprite Engine definition
+
+LiveSprite Engine is the deterministic math layer that stores, transforms, resolves, and compiles sprite instructions into pixels.
+
+It does not know about:
+
+animation timelines
+source files
+3D models
+video
+Practipuppets
+Arranger layouts
+engine importers
+toolkit UI
+
+It does know about:
+
+regions
+pixels-as-math
+operations
+palettes
+fills
+strokes
+transforms
+deforms
+pivots
+sockets
+boundaries
+raster resolution
+deterministic compilation
+
+The apps provide intent.
+LiveSprite resolves the math.
+
+1. Document and sprite primitives
+
+The engine should expose basic containers:
+
+CreateDocument
+CreateSprite
+CreateLayer
+CreateGroup
+DeleteSprite
+CloneSprite
+SnapshotSprite
+Serialize
+Deserialize
+
+Core responsibility:
+
+store mathematical sprite state
+preserve operation order
+resolve dependencies
+compile deterministic output
+
+App responsibility:
+
+project UI
+toolkits
+naming conventions
+file browser
+layer panel behavior
+undo presentation
+2. Geometry primitives
+
+The engine should create and manipulate shapes.
+
+Point
+Line
+Polyline
+Rectangle
+Ellipse
+Circle
+Polygon
+Curve
+Region
+IntervalSet
+Contour
+Bounds
+
+Required operations:
+
+CreateRect
+CreatePolygon
+CreateEllipse
+CreatePolyline
+CreateCurve
+CreateRegionFromIntervals
+CreateRegionFromCompiledSnapshot
+TraceBoundary
+GetBounds
+GetCentroid
+GetArea
+
+These are the foundation for drawing, fills, outlines, masks, boundaries, and transform zones.
+
+3. Region boolean operations
+
+The engine should own all region math:
+
+Union
+Subtract
+Intersect
+Xor
+Clip
+Mask
+Invert
+Merge
+Split
+ConnectedComponents
+Simplify
+Inset
+Outset
+Expand
+Contract
+
+These matter because almost every higher-level tool eventually becomes:
+
+this operation affects this region
+4. Layer compositing operations
+
+Layers should exist in core as mathematical/compositing containers.
+
+Expose:
+
+SetLayerOrder
+SetLayerVisibility
+SetLayerOpacity
+SetLayerBlendMode
+SetLayerMask
+SetLayerClip
+SetLayerParent
+FlattenForCompile
+
+Core should only understand layers as:
+
+ordered operation groups with compositing rules
+
+The app decides whether a layer is a drawing layer, generated layer, source layer, animation track, puppet part, or export group.
+
+5. Fill operations
+
+Fills are live operations.
+
+Expose:
+
+FillSolid
+FillGradient
+FillRamp
+FillDither
+FillPattern
+FillNoise
+FillLinePattern
+FillTexturePattern
+FillSemanticColor
+
+Each fill should target:
+
+region
+layer
+palette role
+pattern space
+density
+phase
+falloff
+blend/composite rule
+
+Example internal operation:
+
+DitherFill(
+  targetRegion = torso_shadow,
+  ramp = olive_ramp,
+  pattern = bayer_4x4,
+  density = 0.42,
+  coordinateSpace = object
+)
+6. Stroke operations
+
+The engine should support strokes as math, not raster marks.
+
+Expose:
+
+StrokePolyline
+StrokeCurve
+StrokeRegionBoundary
+StrokeBrush
+StrokePixelPath
+StrokeOutline
+StrokeInnerOutline
+StrokeOuterOutline
+
+Stroke controls:
+
+width
+cap
+join
+miter
+taper
+pattern
+palette role
+snap policy
+coverage policy
+
+Even the pencil tool can be app-side UI that emits stroke/path operations.
+
+7. Outline and edge operations
+
+Outlines are core because they affect sprite readability and transform consistency.
+
+Expose:
+
+GenerateSilhouetteOutline
+GenerateInnerOutline
+GenerateOuterOutline
+GenerateRegionOutline
+GenerateMaterialBoundaryOutline
+CleanupOutline
+JoinCorners
+ResolveOutlineCollisions
+
+Controls:
+
+thickness
+inside/outside/center
+corner rule
+diagonal rule
+palette role
+boundary source
+8. Palette and color operations
+
+The engine should own color semantics.
+
+Expose:
+
+CreatePalette
+SetPaletteColor
+CreateRamp
+BindColorRole
+BindRegionToPaletteRole
+SwapPalette
+RemapRamp
+NearestPaletteColor
+QuantizeToPalette
+ConstrainToPalette
+ResolveSemanticColor
+
+Core should support:
+
+indexed colors
+semantic colors
+ramps
+material roles
+palette variants
+nearest-match policies
+
+The app owns palette UI.
+The engine owns palette resolution.
+
+9. Dither and pattern operations
+
+Dither must be deterministic and core-owned.
+
+Expose:
+
+CreatePattern
+ApplyOrderedDither
+ApplyCheckerDither
+ApplyLineDither
+ApplySeededNoiseDither
+ApplyThresholdPattern
+SetPatternPhase
+SetPatternDensity
+SetPatternCoordinateSpace
+
+Coordinate spaces are critical:
+
+object space
+sprite space
+canvas space
+screen/export space
+
+This prevents shimmer and makes patterns stable under motion or transform.
+
+10. Transform operations
+
+Transforms are central to LiveSprite.
+
+Expose:
+
+Translate
+Rotate
+Scale
+Mirror
+Shear
+Skew
+Squash
+Stretch
+MatrixTransform
+PivotTransform
+AnchorTransform
+TransformRegion
+TransformLayer
+TransformSprite
+
+Every transform should accept:
+
+target
+pivot
+coordinate space
+rounding policy
+sampling policy
+bounds policy
+
+The core does not care if a transform came from a canvas gizmo, Animotron keyframe, Practipuppet, or importer.
+
+It only resolves it.
+
+11. Deformation operations
+
+These are still core because they are mathematical deformation tools.
+
+Expose:
+
+Bend
+Warp
+LatticeDeform
+EnvelopeDeform
+PinDeform
+WeightedDeform
+BoundaryDeform
+PathDeform
+
+Controls:
+
+boundary
+falloff
+strength
+handle points
+locked points
+influence region
+coordinate space
+
+Practipuppets may produce these parameters, but the engine executes them.
+
+12. Spatial anchors
+
+These are core.
+
+They are not animation features.
+They are transform and composition metadata.
+
+Pivot
+
+Expose:
+
+SetPivot
+GetPivot
+MovePivot
+TransformAroundPivot
+
+Meaning:
+
+where rotation, scale, squash, and stretch originate
+Socket
+
+Expose:
+
+AddSocket
+RemoveSocket
+MoveSocket
+RotateSocket
+ResolveSocketAttachment
+GetSocketTransform
+
+Meaning:
+
+where another sprite’s pivot connects
+
+Core knows attachment math.
+
+The app decides whether the socket is a hand, weapon grip, backpack mount, or UI marker.
+
+Boundaries
+
+Expose:
+
+CreateBoundary
+EditBoundary
+AssignBoundaryToOperation
+GetBoundaryInfluence
+CompileBoundaryMask
+ExportBoundaryShape
+
+Meaning:
+
+where an operation has influence
+
+Boundaries support:
+
+squash zones
+stretch zones
+collision regions
+deform influence
+fill masks
+outline limits
+13. Raster resolution operations
+
+This is one of the most important core systems.
+
+Expose compile policies:
+
+CenterSample
+CoverageSample
+MajoritySample
+MedianSample
+AverageSample
+ThresholdSample
+NearestPaletteResolve
+AlphaThreshold
+PixelSnap
+SubpixelRounding
+AntiAliasDiscard
+
+Resolution controls:
+
+output width
+output height
+pixel grid
+sampling method
+coverage threshold
+rounding policy
+palette policy
+alpha policy
+
+This defines how math becomes pixels.
+
+14. Compilation operations
+
+The engine must expose deterministic compilation.
+
+CompileSprite
+CompileLayer
+CompileRegion
+CompilePreview
+CompileToRaster
+CompileToMask
+CompileToIntervals
+CompileToCollisionShape
+
+Compilation should support:
+
+preview profile
+export profile
+debug profile
+mask-only profile
+bounds-only profile
+
+The compiler must guarantee:
+
+same input + same engine version + same profile = same output
+15. Snapshot operations
+
+Since “bake” is app-owned, the core should only expose low-level snapshot tools.
+
+Expose:
+
+SnapshotCompiledSprite
+SnapshotCompiledLayer
+SnapshotRegion
+ConvertSnapshotToLiveRegion
+ConvertMaskToIntervals
+ConvertRasterToRegionData
+
+The app decides whether this is called:
+
+Bake Frame
+Bake Pose
+Bake Export Cell
+Bake Track
+New Source From Output
+
+The core just provides the mathematical conversion.
+
+16. Dependency and cache operations
+
+The core should expose dependency control.
+
+MarkDirty
+GetDependencies
+GetDependents
+Recompute
+CompileDirtyOnly
+ClearCache
+CachePreview
+CacheOperationResult
+
+This is needed for live editing performance.
+
+If a palette changes, the engine should know what needs recomputing.
+
+If a region changes, dependent fills/outlines/transforms update.
+
+17. Serialization operations
+
+Core should own the canonical LiveSprite representation.
+
+Expose:
+
+SerializeCoreDocument
+DeserializeCoreDocument
+SerializeSprite
+DeserializeSprite
+SerializeOperation
+DeserializeOperation
+MigrateVersion
+PreserveUnknownData
+
+Important for Fast/Pract compatibility:
+
+unsupported app data is preserved
+core data is always readable
+18. Plugin/math extension interface
+
+The core can expose a controlled operation plugin interface without exposing Pract systems.
+
+RegisterOperationType
+RegisterPatternType
+RegisterFillResolver
+RegisterTransformResolver
+RegisterCompilePolicy
+
+Each plugin operation must declare:
+
+inputs
+outputs
+parameters
+determinism rules
+serialization schema
+engine version compatibility
+
+This lets the ecosystem grow without putting source synthesis, animation, or Arranger logic inside the core.
+
+What LiveSprite Engine should not expose
+
+Keep these outside the core:
+
+ImportGLB
+ScrubVideo
+ExtractPose
+ExtractPaletteFromPhoto
+Capture3DRotation
+CreateAnimationClip
+PlayTimeline
+CreatePractipuppet
+SolveIK
+ArrangeSpriteSheet
+ExportGodotProject
+ExportUnityPackage
+BakeAnimationTrack
+
+These are app/toolkit/plugin systems.
+
+They may call LiveSprite operations, but they are not LiveSprite Core.
+
+Final core API shape
+
+At the highest level, the engine exposes five categories:
+
+1. Structure
+   documents, sprites, layers, regions
+
+2. Appearance
+   fills, strokes, palettes, outlines, patterns
+
+3. Motion math
+   transforms, deforms, pivots, sockets, boundaries
+
+4. Resolution
+   sampling, rasterization, compilation, snapshots
+
+5. Infrastructure
+   dependencies, cache, serialization, extension hooks
+
+The simplest definition:
+
+LiveSprite Engine exposes the math required to define, transform, and resolve sprites. Everything that decides why, when, or from where those parameters come is app-side.
+
+Now, what are Sprit's'pract and Sprit's'fast and how the bridge the LiveSprite system with current workflows
+Relationship between LiveSprite, Sprit’s’fast, and Sprit’s’pract
+LiveSprite Engine
+    ↓
+Sprit’s’fast
+    ↓
+Sprit’s’pract
+
+The engine is the mathematical foundation.
+
+Fast and Pract are not different engines.
+
+They are:
+
+different workflow environments
+
+built on the same LiveSprite architecture.
+
+What LiveSprite is
+
+LiveSprite is:
+
+the hidden mathematical sprite substrate
+
+It is not an editor.
+
+It is not a workflow.
+
+It is not animation software.
+
+It is not a source interpreter.
+
+It is:
+
+a deterministic sprite math engine
+
+that:
+
+stores sprite instructions
+resolves transforms
+compiles pixels
+preserves editability
+guarantees deterministic output
+
+The user should almost never think about LiveSprite directly.
+
+What Sprit’s’fast is
+One-sentence definition
+
+Sprit’s’fast is a lightweight open-source LiveSprite editor that bridges traditional pixel-art workflows into non-destructive sprite editing.
+
+Purpose of Sprit’s’fast
+
+Fast exists to:
+
+introduce the LiveSprite paradigm
+feel familiar to current sprite artists
+provide a genuinely useful free tool
+prove LiveSprite viability publicly
+create adoption and goodwill
+bridge traditional workflows
+
+It is:
+
+the approachable face of LiveSprites
+Philosophical role
+
+Fast says:
+
+“You already know how to make sprites.
+Now do it without destroying your work.”
+
+That is the bridge.
+
+What workflows Fast supports
+
+Fast intentionally mirrors:
+
+Aseprite
+LibreSprite
+Pixelorama
+traditional sprite editors
+
+The user:
+
+draws pixels
+animates frames
+uses layers
+fills regions
+rotates objects
+exports sprite sheets
+
+Everything feels normal.
+
+The hidden difference
+
+Internally:
+
+fills remain live
+transforms remain procedural
+palette operations remain editable
+rotation never damages source truth
+squash/stretch remains deterministic
+
+The user gradually realizes:
+
+“why is this workflow less painful?”
+
+without needing to understand LiveSprites.
+
+What Fast includes
+Canvas toolkit
+drawing
+erasing
+fills
+dithering
+gradients
+layers
+selections
+transforms
+preview
+Simple animation
+frames
+onion skin
+playback
+basic transform tools
+Export
+PNG
+GIF
+sprite strips
+simple sprite sheets
+What Fast intentionally excludes
+
+Fast does not expose:
+
+References toolkit
+source synthesis
+3D pipelines
+Animotron
+Practipuppets
+Arranger
+advanced production systems
+proprietary orchestration logic
+
+This keeps:
+
+the advanced production leverage proprietary
+
+while still exposing:
+
+the core LiveSprite paradigm
+What Sprit’s’pract is
+One-sentence definition
+
+Sprit’s’pract is a LiveSprite-native sprite production suite that unifies source interpretation, sprite authoring, motion systems, and export orchestration into a single live workflow.
+
+Purpose of Pract
+
+Pract exists to solve:
+
+large-scale sprite production friction
+
+It is not merely:
+
+a drawing app
+
+It is:
+
+a sprite production environment
+Philosophical role
+
+Pract says:
+
+“Every sprite workflow should remain live, editable, and reusable until export.”
+
+That is the core idea.
+
+Pract workflows
+
+Pract supports all workflows equally:
+
+pure hand drawing
+frame-by-frame animation
+transform workflows
+puppet workflows
+source-assisted workflows
+3D-assisted workflows
+rotoscoping
+hybrid cleanup workflows
+variant production
+automation
+
+No workflow is mandatory.
+
+No workflow is second-class.
+
+The four-toolkit structure
+1. References Toolkit
+
+Purpose:
+
+interpret source material
+
+Supports:
+
+images
+video
+3D models
+texture photos
+AI references
+palette extraction
+pose extraction
+source overlays
+
+Important:
+
+sources are optional
+2. Canvas Toolkit
+
+Purpose:
+
+author sprite appearance
+
+Feels familiar to traditional sprite artists.
+
+Internally powered by LiveSprites.
+
+3. Animation Toolkit
+
+Purpose:
+
+author motion
+
+Provides:
+
+transforms
+deforms
+Animotron
+Practipuppets
+motion reuse
+baking workflows
+cleanup loops
+
+Animation systems generate parameters for LiveSprite math.
+
+4. Arranger Toolkit
+
+Purpose:
+
+assemble production output
+
+Provides:
+
+sprite sheets
+atlases
+export groups
+variant organization
+QA loops
+engine export profiles
+The bridge between LiveSprites and current workflows
+
+This is the most important design goal.
+
+Traditional workflow problem
+
+Current sprite workflows are:
+
+raster-final
+
+Meaning:
+
+every transform damages pixels
+fills become dead colors
+variants require duplicated labor
+edits propagate poorly
+sprite sheets become disconnected exports
+LiveSprite solution
+
+LiveSprite changes:
+
+the production substrate
+
+not:
+
+the artistic language
+
+The user still sees:
+
+pixels
+sprite frames
+layers
+onion skinning
+palettes
+sprite sheets
+
+But internally:
+
+operations remain editable
+transforms remain mathematical
+fills remain procedural
+exports remain linked
+sprites remain live
+How Fast bridges current workflows
+
+Fast acts as:
+
+the compatibility bridge
+
+It intentionally resembles:
+
+Aseprite
+Pixelorama
+traditional sprite editors
+
+This lowers psychological resistance.
+
+The user learns:
+
+LiveSprite behavior
+
+without learning:
+
+a radically alien workflow
+How Pract bridges advanced workflows
+
+Pract expands naturally from Fast.
+
+Users realize:
+
+the same LiveSprite principles
+
+can scale into:
+
+source-driven workflows
+reusable motion
+production automation
+live export systems
+pipeline orchestration
+
+The transition feels evolutionary, not disruptive.
+
+Cultural positioning
+Fast
+
+Positioning:
+
+“A fast sprite editor with live fills, clean transforms, and non-destructive pixel workflows.”
+
+Fast should feel:
+
+familiar
+safe
+useful
+lightweight
+Pract
+
+Positioning:
+
+“A complete live sprite production suite.”
+
+Pract should feel:
+
+powerful
+modular
+production-aware
+workflow-pluralistic
+The real bridge
+
+The real bridge is:
+
+Artists continue thinking in pixels while LiveSprites quietly eliminate destructive production workflows underneath.
+
+That is the entire philosophy.
+
+The hidden paradigm shift
+
+Today:
+
+sprites are treated as dead images
+
+LiveSprite future:
+
+sprites are treated as living production objects
+
+Fast introduces this gently.
+
+Pract fully exploits it.
+
+Final relationship
+LiveSprite Engine
+
+Mathematical sprite substrate.
+
+Sprit’s’fast
+
+Traditional-feeling editor that introduces LiveSprite behavior.
+
+Sprit’s’pract
+
+Full production suite that exploits the complete LiveSprite paradigm.
+
+Simplest possible summary
+LiveSprite = the math
+
+Fast = the familiar bridge
+
+Pract = the full production revolution
+explain how the system workflow goes for a sprite, and the difference between under the hood flow and artist flow with LiveSprite native apps
+LiveSprite workflow philosophy
+
+The central idea of LiveSprite-native apps is:
+
+The artist manipulates sprites.
+The engine manipulates mathematical intent.
+
+The user never works directly on:
+
+dead raster truth
+
+even though the experience still feels like pixel art.
+
+Two simultaneous workflows exist
+1. Artist workflow
+
+What the user experiences.
+
+2. LiveSprite workflow
+
+What the engine is actually doing internally.
+
+These workflows intentionally do not look the same.
+
+That separation is the entire design philosophy.
+
+Example workflow:
+drawing and animating a sword sprite
+Artist workflow
+
+The artist experiences something familiar:
+
+1. Draw sword
+2. Fill blade
+3. Add dithering
+4. Rotate sword
+5. Adjust outline
+6. Duplicate frame
+7. Stretch slash frame
+8. Export sprite sheet
+
+Feels like:
+
+Aseprite
+pixel drawing
+normal sprite editing
+
+No special math knowledge required.
+
+Under the hood LiveSprite workflow
+
+Internally, the engine never stores:
+
+the final sword pixels
+
+Instead it stores:
+
+region definitions
+fill rules
+dither rules
+outline rules
+pivot
+transform stack
+palette bindings
+stretch parameters
+
+The “sprite” is really:
+
+a mathematical recipe for pixels
+Step-by-step comparison
+1. Artist draws the sword
+Artist experience
+Use pencil tool
+draw sword shape
+
+Feels like normal pixel drawing.
+
+LiveSprite internal flow
+
+The engine may store:
+
+StrokeOperation
+RegionBoundary
+ContourIntervals
+
+Not:
+
+final raster pixels
+
+The raster preview is compiled afterward.
+
+2. Artist fills the blade
+Artist experience
+Bucket fill blade
+LiveSprite internal flow
+
+The engine stores:
+
+DitherFill(
+  region = blade_region,
+  paletteRamp = steel_ramp,
+  pattern = Bayer4x4,
+  density = 0.35
+)
+
+Not:
+
+painted blade pixels
+
+The blade appearance is generated from the operation.
+
+3. Artist rotates the sword
+Artist experience
+Rotate sprite
+
+Maybe using a gizmo.
+
+Traditional raster editor flow
+
+Normally:
+
+existing raster
+→ interpolation
+→ pixel destruction
+→ artifact cleanup
+LiveSprite flow
+
+Instead:
+
+original regions
++ original fills
++ original outlines
++ rotation transform
+→ recompilation
+→ fresh raster
+
+The transform is:
+
+mathematical reinterpretation
+
+not:
+
+pixel damage
+4. Artist edits dithering later
+Artist experience
+Change dither density
+Traditional workflow
+
+Normally:
+
+erase old dither
+redo dither manually
+LiveSprite flow
+
+Instead:
+
+update fill parameters
+→ recompile sprite
+
+The original fill operation remains alive.
+
+5. Artist stretches attack frame
+Artist experience
+Stretch slash frame
+LiveSprite flow
+
+The engine applies:
+
+StretchTransform(
+  boundary = slash_region,
+  falloff = linear,
+  factor = 1.25
+)
+
+The output raster is rebuilt from source truth.
+
+No accumulated degradation occurs.
+
+6. Artist exports
+Artist experience
+Export PNG / spritesheet
+LiveSprite flow
+
+This is the first moment:
+
+final raster truth exists
+
+The engine:
+
+resolves operations
+applies transforms
+resolves palette
+rasterizes output
+writes PNG
+
+The exported file is:
+
+a compiled artifact
+
+not:
+
+the true sprite source
+Why this matters
+
+Traditional sprite pipelines treat:
+
+pixels as source truth
+
+LiveSprite treats:
+
+sprite intent as source truth
+
+That changes everything.
+
+Example:
+sprite sheet correction
+Traditional workflow
+export sheet
+notice broken frame
+find original frame
+edit raster
+re-export everything
+LiveSprite workflow
+Artist experience
+double click frame
+fix source
+sheet updates
+Under the hood
+frame references operations
+operations update
+compiler invalidates dependencies
+sheet recompiles
+
+The sheet is:
+
+a live view
+
+not:
+
+a disconnected export
+The artist never thinks about this
+
+That’s critical.
+
+The user should not feel:
+
+“I am editing vector instructions.”
+
+They should feel:
+
+“why is this workflow less painful?”
+Fast workflow vs Pract workflow
+Sprit’s’fast artist workflow
+
+Feels like:
+
+traditional sprite editor
+
+The user:
+
+draws
+animates
+transforms
+exports
+
+The LiveSprite layer is mostly invisible.
+
+Fast teaches:
+
+non-destructive sprite behavior
+
+gently.
+
+Sprit’s’pract artist workflow
+
+Feels like:
+
+a complete sprite production desk
+
+The user may:
+
+import references
+generate directional captures
+use Practipuppets
+bake states
+arrange exports
+reuse motion
+create variants
+
+But the same LiveSprite principles still apply underneath.
+
+Key distinction
+Traditional apps
+pixels are edited directly
+LiveSprite-native apps
+pixels are resolved from live mathematical state
+
+That is the paradigm shift.
+
+The invisible trick
+
+The real innovation is:
+
+The artist never stops thinking in pixels.
+
+That’s why the system has a chance.
+
+If users had to think:
+
+vectors
+interval math
+procedural graphs
+
+the paradigm would fail culturally.
+
+Instead:
+
+pixels remain the artistic language
+
+while LiveSprite quietly changes:
+
+the production substrate underneath
+Final simplified explanation
+Artist sees
+draw
+fill
+rotate
+animate
+export
+LiveSprite actually does
+store intent
+resolve transforms
+rebuild pixels
+preserve editability
+compile deterministic output
+
+That duality is the entire architecture.

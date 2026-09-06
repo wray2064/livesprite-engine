@@ -1,0 +1,15 @@
+# Build output
+build/
+out/
+
+# MSVC / CMake artifacts
+*.obj
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.idb
+CMakeCache.txt
+CMakeFiles/
+.ninja_deps
+.ninja_log

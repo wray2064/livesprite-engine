@@ -1,0 +1,1481 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LiveSprite Engine Testbed</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1d232b;
+      --muted: #66717f;
+      --line: #cfd6dd;
+      --panel: #ffffff;
+      --field: #f6f8fa;
+      --accent: #1976d2;
+      --red: #ef4c52;
+      --gold: #ffbe39;
+      --edge: #181f27;
+      --grid-a: #f3f5f3;
+      --grid-b: #e8ece8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #f1f3f1;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 14px;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr) 360px;
+      gap: 16px;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    section,
+    aside {
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+
+    .stage {
+      width: 100%;
+      aspect-ratio: 1;
+      border: 2px solid #2b3035;
+      background: var(--panel);
+      image-rendering: pixelated;
+      display: block;
+    }
+
+    .side {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 14px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 0;
+    }
+
+    input {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--field);
+      color: var(--ink);
+      font: inherit;
+      padding: 7px 8px;
+    }
+
+    input[type="color"] {
+      height: 34px;
+      padding: 3px;
+    }
+
+    input[type="range"] {
+      padding: 0;
+    }
+
+    .wide {
+      grid-column: span 2;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid #155ca4;
+      border-radius: 4px;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      border-color: var(--line);
+      background: #fff;
+      color: var(--ink);
+    }
+
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }
+
+    select {
+      min-height: 160px;
+      padding: 4px;
+    }
+
+    .controls select {
+      min-height: 34px;
+    }
+
+    textarea {
+      min-height: 320px;
+      resize: vertical;
+      padding: 8px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.35;
+      white-space: pre;
+    }
+
+    .status {
+      margin-top: 8px;
+      color: var(--muted);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    @media (max-width: 1120px) {
+      main {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .side {
+        grid-column: 1 / -1;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto 1fr;
+      }
+
+      .math-panel {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+      }
+    }
+
+    @media (max-width: 760px) {
+      main,
+      .side {
+        grid-template-columns: 1fr;
+      }
+
+      .math-panel {
+        grid-column: auto;
+        grid-row: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>LiveSprite Input</h1>
+      <canvas id="inputCanvas" class="stage" width="512" height="512"></canvas>
+      <p id="inputStatus" class="status"></p>
+    </section>
+
+    <section class="panel">
+      <h1>Compiled Output</h1>
+      <canvas id="outputCanvas" class="stage" width="512" height="512"></canvas>
+      <p id="outputStatus" class="status"></p>
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <h2>Input Panel</h2>
+        <div class="controls">
+          <label class="wide">Primitive
+            <select id="primitiveType" size="1">
+              <option value="Rectangle">Rectangle</option>
+              <option value="Ellipse">Ellipse</option>
+              <option value="Circle">Circle</option>
+              <option value="Pixels">Pixels</option>
+            </select>
+          </label>
+          <label>X <input id="rectX" type="number" min="0" max="31" value="9"></label>
+          <label>Y <input id="rectY" type="number" min="0" max="31" value="8"></label>
+          <label>W <input id="rectW" type="number" min="1" max="32" value="10"></label>
+          <label>H <input id="rectH" type="number" min="1" max="32" value="17"></label>
+          <label>Rotation <input id="rotation" type="number" min="-90" max="90" step="1" value="25"></label>
+          <label>Density <input id="density" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+          <label>Seed <input id="seed" type="number" min="1" max="999" value="17"></label>
+          <label class="wide">Dither Space
+            <select id="ditherSpace" size="1">
+              <option value="Object">Object / Fill</option>
+              <option value="Canvas">Canvas / Screen</option>
+            </select>
+          </label>
+          <label>Fill A <input id="fillA" type="color" value="#ef4c52"></label>
+          <label>Fill B <input id="fillB" type="color" value="#ffbe39"></label>
+          <label>Outline <input id="outline" type="color" value="#181f27"></label>
+          <label>Canvas <input id="canvasSize" type="number" min="16" max="64" value="32"></label>
+        </div>
+        <div class="button-row">
+          <button id="addPrimitiveBtn" class="secondary">Add Primitive</button>
+          <button id="removePrimitiveBtn" class="secondary">Remove Selected</button>
+          <button id="compileBtn">Compile</button>
+          <button id="resetBtn" class="secondary">Reset</button>
+        </div>
+        <p class="status">Input primitives</p>
+        <select id="primitiveList" size="5"></select>
+      </section>
+
+      <section class="panel">
+        <h2>Stored LiveSprite Operations</h2>
+        <select id="operationList" size="7"></select>
+      </section>
+
+      <section class="panel math-panel">
+        <h2>Math Underneath The Pixels</h2>
+        <textarea id="mathView" readonly></textarea>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const els = {
+      inputCanvas: document.getElementById("inputCanvas"),
+      outputCanvas: document.getElementById("outputCanvas"),
+      inputStatus: document.getElementById("inputStatus"),
+      outputStatus: document.getElementById("outputStatus"),
+      operationList: document.getElementById("operationList"),
+      primitiveList: document.getElementById("primitiveList"),
+      mathView: document.getElementById("mathView"),
+      compileBtn: document.getElementById("compileBtn"),
+      resetBtn: document.getElementById("resetBtn"),
+      addPrimitiveBtn: document.getElementById("addPrimitiveBtn"),
+      removePrimitiveBtn: document.getElementById("removePrimitiveBtn"),
+      primitiveType: document.getElementById("primitiveType"),
+      rectX: document.getElementById("rectX"),
+      rectY: document.getElementById("rectY"),
+      rectW: document.getElementById("rectW"),
+      rectH: document.getElementById("rectH"),
+      rotation: document.getElementById("rotation"),
+      density: document.getElementById("density"),
+      seed: document.getElementById("seed"),
+      ditherSpace: document.getElementById("ditherSpace"),
+      fillA: document.getElementById("fillA"),
+      fillB: document.getElementById("fillB"),
+      outline: document.getElementById("outline"),
+      canvasSize: document.getElementById("canvasSize")
+    };
+
+    const scale = 16;
+    let selectedOperation = 0;
+    let selectedPrimitive = 0;
+    let model = null;
+    let primitiveDrafts = [
+      { type: "Rectangle", x: 9, y: 8, w: 10, h: 17 }
+    ];
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function intValue(el, min, max) {
+      return clamp(parseInt(el.value, 10) || 0, min, max);
+    }
+
+    function floatValue(el, min, max) {
+      return clamp(parseFloat(el.value) || 0, min, max);
+    }
+
+    function colorFromHex(hex) {
+      const clean = hex.replace("#", "");
+      return {
+        r: parseInt(clean.slice(0, 2), 16),
+        g: parseInt(clean.slice(2, 4), 16),
+        b: parseInt(clean.slice(4, 6), 16),
+        a: 255
+      };
+    }
+
+    function colorText(c) {
+      return `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`;
+    }
+
+    function hash2d(x, y, seed) {
+      let h = (seed ^ 0x9e3779b9) >>> 0;
+      h ^= (x + 0x85ebca6b + ((h << 6) >>> 0) + (h >>> 2)) >>> 0;
+      h ^= (y + 0xc2b2ae35 + ((h << 6) >>> 0) + (h >>> 2)) >>> 0;
+      h ^= h >>> 16;
+      h = Math.imul(h, 0x7feb352d) >>> 0;
+      h ^= h >>> 15;
+      h = Math.imul(h, 0x846ca68b) >>> 0;
+      h ^= h >>> 16;
+      return h >>> 0;
+    }
+
+    function makeRaster(size) {
+      return new Uint8ClampedArray(size * size * 4);
+    }
+
+    function setPixel(raster, size, x, y, color) {
+      if (x < 0 || y < 0 || x >= size || y >= size) return;
+      const i = (y * size + x) * 4;
+      raster[i] = color.r;
+      raster[i + 1] = color.g;
+      raster[i + 2] = color.b;
+      raster[i + 3] = color.a;
+    }
+
+    function getPixel(raster, size, x, y) {
+      if (x < 0 || y < 0 || x >= size || y >= size) return { r: 0, g: 0, b: 0, a: 0 };
+      const i = (y * size + x) * 4;
+      return { r: raster[i], g: raster[i + 1], b: raster[i + 2], a: raster[i + 3] };
+    }
+
+    function colorKey(color) {
+      return `${color.r},${color.g},${color.b},${color.a}`;
+    }
+
+    function colorFromKey(key) {
+      const [r, g, b, a] = key.split(",").map(Number);
+      return { r, g, b, a };
+    }
+
+    function dominantNeighborColor(raster, size, x, y) {
+      const votes = new Map();
+      const offsets = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+      for (const [dx, dy] of offsets) {
+        const color = getPixel(raster, size, x + dx, y + dy);
+        if (color.a === 0) continue;
+        const key = colorKey(color);
+        votes.set(key, (votes.get(key) || 0) + (Math.abs(dx) + Math.abs(dy) === 1 ? 2 : 1));
+      }
+      let bestKey = null;
+      let bestVotes = 0;
+      for (const [key, count] of votes) {
+        if (count > bestVotes) {
+          bestKey = key;
+          bestVotes = count;
+        }
+      }
+      return bestKey ? colorFromKey(bestKey) : null;
+    }
+
+    function repairInternalTransparentGaps(raster, size) {
+      const exterior = new Set();
+      const queue = [];
+      const pushTransparent = (x, y) => {
+        if (x < 0 || y < 0 || x >= size || y >= size) return;
+        const key = pixelKey(x, y);
+        if (exterior.has(key)) return;
+        if (getPixel(raster, size, x, y).a !== 0) return;
+        exterior.add(key);
+        queue.push({ x, y });
+      };
+
+      for (let i = 0; i < size; i += 1) {
+        pushTransparent(i, 0);
+        pushTransparent(i, size - 1);
+        pushTransparent(0, i);
+        pushTransparent(size - 1, i);
+      }
+
+      while (queue.length) {
+        const current = queue.shift();
+        pushTransparent(current.x - 1, current.y);
+        pushTransparent(current.x + 1, current.y);
+        pushTransparent(current.x, current.y - 1);
+        pushTransparent(current.x, current.y + 1);
+      }
+
+      const repaired = new Uint8ClampedArray(raster);
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          if (getPixel(raster, size, x, y).a !== 0) continue;
+          if (exterior.has(pixelKey(x, y))) continue;
+          const fill = dominantNeighborColor(raster, size, x, y);
+          if (fill) setPixel(repaired, size, x, y, fill);
+        }
+      }
+      return repaired;
+    }
+
+    function makeIntervals(rect) {
+      const intervals = [];
+      for (let y = rect.y; y < rect.y + rect.h; y += 1) {
+        intervals.push({ y, x0: rect.x, x1: rect.x + rect.w });
+      }
+      return intervals;
+    }
+
+    function makeEllipseIntervals(rect) {
+      const intervals = [];
+      const cx = rect.x + rect.w / 2;
+      const cy = rect.y + rect.h / 2;
+      const rx = rect.w / 2;
+      const ry = rect.h / 2;
+      if (rx <= 0 || ry <= 0) return intervals;
+
+      for (let y = Math.floor(cy - ry); y < Math.ceil(cy + ry); y += 1) {
+        const sampleY = (y + 0.5 - cy) / ry;
+        const inside = 1 - sampleY * sampleY;
+        if (inside < 0) continue;
+        const halfWidth = Math.sqrt(inside) * rx;
+        const x0 = Math.floor(cx - halfWidth);
+        const x1 = Math.ceil(cx + halfWidth);
+        if (x0 < x1) intervals.push({ y, x0, x1 });
+      }
+      return intervals;
+    }
+
+    function intervalsForPrimitive(primitive) {
+      if (primitive.type === "Pixels") {
+        return pixelSetToIntervals(makeAuthoredPixelRegion(primitive).coverage);
+      }
+      if (primitive.type === "Ellipse" || primitive.type === "Circle") {
+        return makeEllipseIntervals(primitive.rect);
+      }
+      return makeIntervals(primitive.rect);
+    }
+
+    function makePixelBoundary(rect) {
+      const pixels = new Set();
+      for (let y = rect.y; y < rect.y + rect.h; y += 1) {
+        for (let x = rect.x; x < rect.x + rect.w; x += 1) {
+          if (x === rect.x || x === rect.x + rect.w - 1 || y === rect.y || y === rect.y + rect.h - 1) {
+            pixels.add(pixelKey(x, y));
+          }
+        }
+      }
+      return pixels;
+    }
+
+    function pixelArrayToSet(pixels) {
+      return new Set((pixels || []).map(pixel => pixelKey(pixel.x, pixel.y)));
+    }
+
+    function defaultPixelLoop(rect) {
+      return [...makePixelBoundary(rect)].map(key => {
+        const [xText, yText] = key.split(",");
+        return { x: Number(xText), y: Number(yText) };
+      });
+    }
+
+    function connectedPixelComponents(pixelSet) {
+      const visited = new Set();
+      const components = [];
+      for (const key of pixelSet) {
+        if (visited.has(key)) continue;
+        const [seedX, seedY] = key.split(",").map(Number);
+        const queue = [{ x: seedX, y: seedY }];
+        const component = new Set([key]);
+        visited.add(key);
+
+        for (let i = 0; i < queue.length; i += 1) {
+          const current = queue[i];
+          const neighbors = [
+            { x: current.x - 1, y: current.y },
+            { x: current.x + 1, y: current.y },
+            { x: current.x, y: current.y - 1 },
+            { x: current.x, y: current.y + 1 },
+            { x: current.x - 1, y: current.y - 1 },
+            { x: current.x + 1, y: current.y - 1 },
+            { x: current.x - 1, y: current.y + 1 },
+            { x: current.x + 1, y: current.y + 1 }
+          ];
+          for (const next of neighbors) {
+            const nextKey = pixelKey(next.x, next.y);
+            if (!pixelSet.has(nextKey) || visited.has(nextKey)) continue;
+            visited.add(nextKey);
+            component.add(nextKey);
+            queue.push(next);
+          }
+        }
+
+        components.push(component);
+      }
+      return components;
+    }
+
+    function hasPixelCycle(pixelSet) {
+      let edgeCount = 0;
+      for (const key of pixelSet) {
+        const [x, y] = key.split(",").map(Number);
+        const forwardNeighbors = [
+          { x: x + 1, y },
+          { x, y: y + 1 },
+          { x: x + 1, y: y + 1 },
+          { x: x - 1, y: y + 1 }
+        ];
+        for (const next of forwardNeighbors) {
+          if (pixelSet.has(pixelKey(next.x, next.y))) edgeCount += 1;
+        }
+      }
+      return edgeCount >= pixelSet.size;
+    }
+
+    function closeBoundaryComponent(boundary) {
+      const coverage = new Set(boundary);
+      if (!boundary.size || !hasPixelCycle(boundary)) {
+        return { coverage, boundary: new Set() };
+      }
+
+      const points = [...boundary].map(key => {
+        const [xText, yText] = key.split(",");
+        return { x: Number(xText), y: Number(yText) };
+      });
+      const minX = Math.min(...points.map(pixel => pixel.x)) - 1;
+      const minY = Math.min(...points.map(pixel => pixel.y)) - 1;
+      const maxX = Math.max(...points.map(pixel => pixel.x)) + 1;
+      const maxY = Math.max(...points.map(pixel => pixel.y)) + 1;
+      const start = pixelKey(minX, minY);
+      const outside = new Set([start]);
+      const queue = [{ x: minX, y: minY }];
+      const sealedBoundary = new Set(boundary);
+      const virtualSeals = new Set();
+
+      for (const key of boundary) {
+        const [x, y] = key.split(",").map(Number);
+        const diagonals = [
+          { diagonal: pixelKey(x - 1, y - 1), bridgeA: pixelKey(x - 1, y), bridgeB: pixelKey(x, y - 1) },
+          { diagonal: pixelKey(x + 1, y - 1), bridgeA: pixelKey(x + 1, y), bridgeB: pixelKey(x, y - 1) },
+          { diagonal: pixelKey(x - 1, y + 1), bridgeA: pixelKey(x - 1, y), bridgeB: pixelKey(x, y + 1) },
+          { diagonal: pixelKey(x + 1, y + 1), bridgeA: pixelKey(x + 1, y), bridgeB: pixelKey(x, y + 1) }
+        ];
+        for (const item of diagonals) {
+          if (boundary.has(item.diagonal) && !boundary.has(item.bridgeA) && !boundary.has(item.bridgeB)) {
+            sealedBoundary.add(item.bridgeA);
+            sealedBoundary.add(item.bridgeB);
+            virtualSeals.add(item.bridgeA);
+            virtualSeals.add(item.bridgeB);
+          }
+        }
+      }
+
+      for (let i = 0; i < queue.length; i += 1) {
+        const current = queue[i];
+        const neighbors = [
+          { x: current.x - 1, y: current.y },
+          { x: current.x + 1, y: current.y },
+          { x: current.x, y: current.y - 1 },
+          { x: current.x, y: current.y + 1 }
+        ];
+          for (const next of neighbors) {
+          if (next.x < minX || next.y < minY || next.x > maxX || next.y > maxY) continue;
+          const key = pixelKey(next.x, next.y);
+          if (sealedBoundary.has(key) || outside.has(key)) continue;
+          outside.add(key);
+          queue.push(next);
+        }
+      }
+
+      let enclosedAny = false;
+      const interior = new Set();
+      for (let y = minY + 1; y < maxY; y += 1) {
+        for (let x = minX + 1; x < maxX; x += 1) {
+          const key = pixelKey(x, y);
+          if (!sealedBoundary.has(key) && !outside.has(key)) {
+            interior.add(key);
+            enclosedAny = true;
+          }
+        }
+      }
+
+      for (const key of virtualSeals) {
+        const [x, y] = key.split(",").map(Number);
+        const neighbors = [
+          pixelKey(x - 1, y),
+          pixelKey(x + 1, y),
+          pixelKey(x, y - 1),
+          pixelKey(x, y + 1)
+        ];
+        if (neighbors.some(neighbor => interior.has(neighbor))) {
+          interior.add(key);
+          enclosedAny = true;
+        }
+      }
+
+      interior.forEach(key => coverage.add(key));
+
+      return { coverage, boundary: enclosedAny ? boundary : new Set() };
+    }
+
+    function makeAuthoredPixelRegion(primitive) {
+      const authoredPixels = pixelArrayToSet(primitive.pixels || []);
+      const coverage = new Set(authoredPixels);
+      const boundary = new Set();
+
+      for (const component of connectedPixelComponents(authoredPixels)) {
+        const closed = closeBoundaryComponent(component);
+        closed.coverage.forEach(key => coverage.add(key));
+        closed.boundary.forEach(key => boundary.add(key));
+      }
+
+      return { coverage, boundary };
+    }
+
+    function pixelKey(x, y) {
+      return `${x},${y}`;
+    }
+
+    function buildPixelSet(intervals) {
+      const pixels = new Set();
+      for (const interval of intervals) {
+        for (let x = interval.x0; x < interval.x1; x += 1) {
+          pixels.add(pixelKey(x, interval.y));
+        }
+      }
+      return pixels;
+    }
+
+    function isBoundaryPixel(pixelSet, x, y) {
+      return !pixelSet.has(pixelKey(x - 1, y)) ||
+        !pixelSet.has(pixelKey(x + 1, y)) ||
+        !pixelSet.has(pixelKey(x, y - 1)) ||
+        !pixelSet.has(pixelKey(x, y + 1));
+    }
+
+    function orthogonalNeighborCount(pixelSet, x, y) {
+      let count = 0;
+      if (pixelSet.has(pixelKey(x - 1, y))) count += 1;
+      if (pixelSet.has(pixelKey(x + 1, y))) count += 1;
+      if (pixelSet.has(pixelKey(x, y - 1))) count += 1;
+      if (pixelSet.has(pixelKey(x, y + 1))) count += 1;
+      return count;
+    }
+
+    function cleanupTransformedPixelSet(pixelSet, size, protectedPixels = new Set()) {
+      const cleaned = new Set(pixelSet);
+
+      for (let pass = 0; pass < 2; pass += 1) {
+        const additions = [];
+        for (let y = 0; y < size; y += 1) {
+          for (let x = 0; x < size; x += 1) {
+            const key = pixelKey(x, y);
+            if (!cleaned.has(key) && orthogonalNeighborCount(cleaned, x, y) >= 3) {
+              additions.push(key);
+            }
+          }
+        }
+        additions.forEach(key => cleaned.add(key));
+
+        const removals = [];
+        for (const key of cleaned) {
+          const [xText, yText] = key.split(",");
+          const x = Number(xText);
+          const y = Number(yText);
+          if (!protectedPixels.has(key) && orthogonalNeighborCount(cleaned, x, y) <= 1) {
+            removals.push(key);
+          }
+        }
+        removals.forEach(key => cleaned.delete(key));
+      }
+
+      return cleaned;
+    }
+
+    function pixelSetToIntervals(pixelSet) {
+      const rows = new Map();
+      for (const key of pixelSet) {
+        const [xText, yText] = key.split(",");
+        const x = Number(xText);
+        const y = Number(yText);
+        if (!rows.has(y)) rows.set(y, []);
+        rows.get(y).push(x);
+      }
+
+      const intervals = [];
+      const sortedRows = [...rows.entries()].sort((a, b) => a[0] - b[0]);
+      for (const [y, xs] of sortedRows) {
+        xs.sort((a, b) => a - b);
+        let start = xs[0];
+        let prev = xs[0];
+        for (let i = 1; i < xs.length; i += 1) {
+          const x = xs[i];
+          if (x === prev + 1) {
+            prev = x;
+            continue;
+          }
+          intervals.push({ y, x0: start, x1: prev + 1 });
+          start = x;
+          prev = x;
+        }
+        intervals.push({ y, x0: start, x1: prev + 1 });
+      }
+      return intervals;
+    }
+
+    function boundsFromRaster(raster, size) {
+      let minX = size;
+      let minY = size;
+      let maxX = 0;
+      let maxY = 0;
+      let count = 0;
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          if (raster[(y * size + x) * 4 + 3] === 0) continue;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x + 1);
+          maxY = Math.max(maxY, y + 1);
+          count += 1;
+        }
+      }
+      if (count === 0) return { x: 0, y: 0, w: 0, h: 0, pixels: 0 };
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY, pixels: count };
+    }
+
+    function boundsFromIntervals(intervals) {
+      if (!intervals.length) return { x: 0, y: 0, w: 0, h: 0, pixels: 0 };
+      let minX = intervals[0].x0;
+      let maxX = intervals[0].x1;
+      let minY = intervals[0].y;
+      let maxY = intervals[0].y + 1;
+      let pixels = 0;
+      for (const interval of intervals) {
+        minX = Math.min(minX, interval.x0);
+        maxX = Math.max(maxX, interval.x1);
+        minY = Math.min(minY, interval.y);
+        maxY = Math.max(maxY, interval.y + 1);
+        pixels += interval.x1 - interval.x0;
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY, pixels };
+    }
+
+    function unionBounds(items) {
+      const nonEmpty = items.filter(item => item.w > 0 && item.h > 0);
+      if (!nonEmpty.length) return { x: 0, y: 0, w: 1, h: 1, pixels: 0 };
+      const minX = Math.min(...nonEmpty.map(item => item.x));
+      const minY = Math.min(...nonEmpty.map(item => item.y));
+      const maxX = Math.max(...nonEmpty.map(item => item.x + item.w));
+      const maxY = Math.max(...nonEmpty.map(item => item.y + item.h));
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY, pixels: nonEmpty.reduce((sum, item) => sum + item.pixels, 0) };
+    }
+
+    function rotateRaster(source, size, angleDeg, pivot) {
+      const output = makeRaster(size);
+      const radians = angleDeg * Math.PI / 180;
+      const c = Math.cos(radians);
+      const s = Math.sin(radians);
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          const dx = x + 0.5 - pivot.x;
+          const dy = y + 0.5 - pivot.y;
+          const srcX = Math.floor(pivot.x + c * dx + s * dy);
+          const srcY = Math.floor(pivot.y - s * dx + c * dy);
+          const color = getPixel(source, size, srcX, srcY);
+          if (color.a !== 0) setPixel(output, size, x, y, color);
+        }
+      }
+      return repairInternalTransparentGaps(output, size);
+    }
+
+    function normalizePrimitive(primitive, size) {
+      const x = clamp(Math.round(primitive.x), 0, size - 1);
+      const y = clamp(Math.round(primitive.y), 0, size - 1);
+      let w = clamp(Math.round(primitive.w), 1, size - x);
+      let h = clamp(Math.round(primitive.h), 1, size - y);
+      if (primitive.type === "Circle") {
+        const side = Math.min(w, h);
+        w = side;
+        h = side;
+      }
+      const normalized = { type: primitive.type, x, y, w, h, rect: { x, y, w, h } };
+      if (primitive.type === "Pixels") {
+        const pixels = primitive.pixels || [];
+        normalized.pixels = pixels
+          .map(pixel => ({ x: clamp(Math.round(pixel.x), 0, size - 1), y: clamp(Math.round(pixel.y), 0, size - 1) }))
+          .filter((pixel, index, all) => all.findIndex(other => other.x === pixel.x && other.y === pixel.y) === index);
+      }
+      return normalized;
+    }
+
+    function primitiveSummary(region) {
+      const r = region.rect;
+      if (region.type === "Ellipse" || region.type === "Circle") {
+        const cx = r.x + r.w / 2;
+        const cy = r.y + r.h / 2;
+        return `${region.type.toLowerCase()}(center:(${cx.toFixed(1)}, ${cy.toFixed(1)}), radius:(${(r.w / 2).toFixed(1)}, ${(r.h / 2).toFixed(1)}))`;
+      }
+      if (region.type === "Pixels") {
+        const authoredCount = region.pixels?.length || 0;
+        return `pixels(${authoredCount} authored, same-color boundary candidates)`;
+      }
+      return `rect((${r.x}, ${r.y}) -> (${r.x + r.w}, ${r.y + r.h}))`;
+    }
+
+    function primitiveContains(region, x, y) {
+      const r = region.rect;
+      if (region.type === "Ellipse" || region.type === "Circle") {
+        const cx = r.x + r.w / 2;
+        const cy = r.y + r.h / 2;
+        const rx = r.w / 2;
+        const ry = r.h / 2;
+        if (rx <= 0 || ry <= 0) return false;
+        const nx = (x + 0.5 - cx) / rx;
+        const ny = (y + 0.5 - cy) / ry;
+        return nx * nx + ny * ny <= 1;
+      }
+      if (region.type === "Pixels") {
+        return buildPixelSet(region.intervals).has(pixelKey(x, y));
+      }
+      return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+    }
+
+    function inverseRotatePoint(x, y, angleDeg, pivot) {
+      const radians = angleDeg * Math.PI / 180;
+      const c = Math.cos(radians);
+      const s = Math.sin(radians);
+      const dx = x - pivot.x;
+      const dy = y - pivot.y;
+      return {
+        x: pivot.x + c * dx + s * dy,
+        y: pivot.y - s * dx + c * dy
+      };
+    }
+
+    function rotatePointForward(x, y, angleDeg, pivot) {
+      const radians = angleDeg * Math.PI / 180;
+      const c = Math.cos(radians);
+      const s = Math.sin(radians);
+      const dx = x - pivot.x;
+      const dy = y - pivot.y;
+      return {
+        x: pivot.x + c * dx - s * dy,
+        y: pivot.y + s * dx + c * dy
+      };
+    }
+
+    function normalizedAngle(angleDeg) {
+      return ((Math.round(angleDeg) % 360) + 360) % 360;
+    }
+
+    function isOrthogonalRotation(angleDeg) {
+      return Math.abs(angleDeg - Math.round(angleDeg)) < 0.0001 &&
+        normalizedAngle(angleDeg) % 90 === 0;
+    }
+
+    function supersampledSourceHit(region, x, y, rotate) {
+      const offsets = [1 / 6, 0.5, 5 / 6];
+      let hits = 0;
+      let firstHit = null;
+
+      for (const oy of offsets) {
+        for (const ox of offsets) {
+          const source = inverseRotatePoint(x + ox, y + oy, rotate.angle, rotate.pivot);
+          const sourceX = Math.floor(source.x);
+          const sourceY = Math.floor(source.y);
+          if (primitiveContains(region, sourceX, sourceY)) {
+            hits += 1;
+            if (!firstHit) firstHit = { x: sourceX, y: sourceY };
+          }
+        }
+      }
+
+      return hits >= 6 ? firstHit : null;
+    }
+
+    function transformedRegion(region, model, rotate) {
+      if (rotate.angle === 0) {
+        return region;
+      }
+
+      const pixelSet = new Set();
+      const boundaryPixelSet = region.boundaryPixels ? new Set() : null;
+      const authoredPixelSet = region.authoredPixels ? new Set() : null;
+      const sourceByOutput = new Map();
+
+      if (isOrthogonalRotation(rotate.angle)) {
+        for (const interval of region.intervals) {
+          for (let x = interval.x0; x < interval.x1; x += 1) {
+            const rotated = rotatePointForward(x + 0.5, interval.y + 0.5, rotate.angle, rotate.pivot);
+            const outX = Math.floor(rotated.x);
+            const outY = Math.floor(rotated.y);
+            if (outX >= 0 && outY >= 0 && outX < model.canvasSize && outY < model.canvasSize) {
+              const outKey = pixelKey(outX, outY);
+              pixelSet.add(outKey);
+              sourceByOutput.set(outKey, { x, y: interval.y });
+              if (region.boundaryPixels?.has(pixelKey(x, interval.y))) {
+                boundaryPixelSet.add(outKey);
+              }
+              if (region.authoredPixels?.has(pixelKey(x, interval.y))) {
+                authoredPixelSet.add(outKey);
+              }
+            }
+          }
+        }
+        const intervals = pixelSetToIntervals(pixelSet);
+        return {
+          ...region,
+          intervals,
+          bounds: boundsFromIntervals(intervals),
+          authoredPixels: authoredPixelSet,
+          boundaryPixels: boundaryPixelSet,
+          sourceByOutput,
+          inverseMap: null,
+          summaryOverride: `${primitiveSummary(region)} transformed by rotate(${rotate.angle.toFixed(1)}deg)`
+        };
+      } else {
+        const useSupersampledCoverage = Boolean(region.boundaryPixels?.size && !region.preserveLoosePixels);
+        for (let y = 0; y < model.canvasSize; y += 1) {
+          for (let x = 0; x < model.canvasSize; x += 1) {
+            const source = inverseRotatePoint(x + 0.5, y + 0.5, rotate.angle, rotate.pivot);
+            const sourceX = Math.floor(source.x);
+            const sourceY = Math.floor(source.y);
+            const sampledSource = useSupersampledCoverage
+              ? supersampledSourceHit(region, x, y, rotate)
+              : (primitiveContains(region, sourceX, sourceY) ? { x: sourceX, y: sourceY } : null);
+
+            if (sampledSource) {
+              const outKey = pixelKey(x, y);
+              pixelSet.add(outKey);
+              const sourceForFill = primitiveContains(region, sourceX, sourceY)
+                ? { x: sourceX, y: sourceY }
+                : sampledSource;
+              sourceByOutput.set(outKey, sourceForFill);
+              if (!useSupersampledCoverage) {
+                if (region.boundaryPixels?.has(pixelKey(sourceX, sourceY))) {
+                  boundaryPixelSet.add(pixelKey(x, y));
+                }
+                if (region.authoredPixels?.has(pixelKey(sourceX, sourceY))) {
+                  authoredPixelSet.add(pixelKey(x, y));
+                }
+              }
+            }
+          }
+        }
+
+        if (region.preserveLoosePixels || region.boundaryPixels?.size) {
+          const protectedSourceSet = region.preserveLoosePixels ? region.authoredPixels : region.boundaryPixels;
+          const protectedSourcePixels = protectedSourceSet
+            ? [...protectedSourceSet].map(key => {
+                const [xText, yText] = key.split(",");
+                return { x: Number(xText), y: Number(yText) };
+              })
+            : [];
+          for (const sourcePixel of protectedSourcePixels) {
+              const rotated = rotatePointForward(sourcePixel.x + 0.5, sourcePixel.y + 0.5, rotate.angle, rotate.pivot);
+              const outX = Math.floor(rotated.x);
+              const outY = Math.floor(rotated.y);
+              if (outX >= 0 && outY >= 0 && outX < model.canvasSize && outY < model.canvasSize) {
+                const outKey = pixelKey(outX, outY);
+                pixelSet.add(outKey);
+                sourceByOutput.set(outKey, sourcePixel);
+                if (region.boundaryPixels?.has(pixelKey(sourcePixel.x, sourcePixel.y))) {
+                  boundaryPixelSet.add(outKey);
+                }
+                if (region.authoredPixels?.has(pixelKey(sourcePixel.x, sourcePixel.y))) {
+                  authoredPixelSet.add(outKey);
+                }
+              }
+          }
+        }
+      }
+
+      const protectedOutputPixels = new Set([
+        ...((boundaryPixelSet && boundaryPixelSet.size) ? boundaryPixelSet : []),
+        ...((region.preserveLoosePixels && authoredPixelSet) ? authoredPixelSet : [])
+      ]);
+      const cleanedPixelSet = isOrthogonalRotation(rotate.angle) || region.preserveLoosePixels
+        ? pixelSet
+        : cleanupTransformedPixelSet(pixelSet, model.canvasSize, protectedOutputPixels);
+      const cleanedBoundaryPixelSet = boundaryPixelSet
+        ? new Set([...boundaryPixelSet].filter(key => cleanedPixelSet.has(key)))
+        : null;
+      const cleanedAuthoredPixelSet = authoredPixelSet
+        ? new Set([...authoredPixelSet].filter(key => cleanedPixelSet.has(key)))
+        : null;
+      const intervals = pixelSetToIntervals(cleanedPixelSet);
+      return {
+        ...region,
+        intervals,
+        bounds: boundsFromIntervals(intervals),
+        authoredPixels: cleanedAuthoredPixelSet,
+        boundaryPixels: cleanedBoundaryPixelSet,
+        sourceByOutput,
+        inverseMap: isOrthogonalRotation(rotate.angle)
+          ? null
+          : (x, y) => inverseRotatePoint(x + 0.5, y + 0.5, rotate.angle, rotate.pivot),
+        summaryOverride: `${primitiveSummary(region)} transformed by rotate(${rotate.angle.toFixed(1)}deg)`
+      };
+    }
+
+    function buildModel() {
+      const size = intValue(els.canvasSize, 16, 64);
+      const density = floatValue(els.density, 0, 1);
+      const seed = intValue(els.seed, 1, 9999);
+      const ditherSpace = els.ditherSpace.value;
+      const fillA = colorFromHex(els.fillA.value);
+      const fillB = colorFromHex(els.fillB.value);
+      const outline = colorFromHex(els.outline.value);
+      const angle = floatValue(els.rotation, -90, 90);
+      const regions = primitiveDrafts.map((primitive, index) => {
+        const bounded = normalizePrimitive(primitive, size);
+        const intervals = intervalsForPrimitive(bounded);
+        const pixelBoundary = bounded.type === "Pixels" ? makeAuthoredPixelRegion(bounded).boundary : null;
+        const authoredPixels = bounded.type === "Pixels" ? pixelArrayToSet(bounded.pixels) : null;
+        const hasAuthoredBoundary = Boolean(pixelBoundary && pixelBoundary.size > 0);
+        return {
+          id: index + 1,
+          type: bounded.type,
+          rect: bounded.rect,
+          pixels: bounded.pixels,
+          intervals,
+          authoredPixels,
+          boundaryPixels: pixelBoundary,
+          preserveLoosePixels: bounded.type === "Pixels" && !hasAuthoredBoundary,
+          bounds: boundsFromIntervals(intervals)
+        };
+      });
+      const sourceBounds = unionBounds(regions.map(region => region.bounds));
+      const pivot = { x: sourceBounds.x - 0.5, y: sourceBounds.y + sourceBounds.h + 0.5 };
+      const socket = { x: sourceBounds.x + sourceBounds.w + 0.5, y: sourceBounds.y - 4.5 };
+      const operations = [];
+
+      for (const region of regions) {
+        operations.push({
+          id: operations.length + 1,
+          type: region.type,
+          summary: primitiveSummary(region),
+          regionId: region.id
+        });
+        operations.push({
+          id: operations.length + 1,
+          type: "Solid outline fill",
+          summary: `solidFill(region:${region.id}, color:${colorText(outline)})`,
+          regionId: region.id,
+          color: outline
+        });
+        operations.push({
+          id: operations.length + 1,
+          type: "Dithered gradient fill",
+          summary: `ditheredGradient(region:${region.id}, seed:${seed}, density:${density.toFixed(2)}, space:${ditherSpace})`,
+          regionId: region.id,
+          colorA: fillA,
+          colorB: fillB,
+          density,
+          seed,
+          space: ditherSpace
+        });
+      }
+
+      operations.push({
+        id: operations.length + 1,
+        type: "Rotate",
+        summary: `rotate(${angle.toFixed(1)}deg around pivot(${pivot.x.toFixed(1)}, ${pivot.y.toFixed(1)}))`,
+        angle,
+        pivot
+      });
+
+      return {
+        engineVersion: "0.1.0",
+        canvasSize: size,
+        regions,
+        operations,
+        anchors: { pivot, socket }
+      };
+    }
+
+    function compileRegions(model, regions, tracePrefix) {
+      const raster = makeRaster(model.canvasSize);
+      const trace = [];
+
+      for (const region of regions) {
+        const outlineOp = model.operations.find(op => op.type === "Solid outline fill" && op.regionId === region.id);
+        const fillOp = model.operations.find(op => op.type === "Dithered gradient fill" && op.regionId === region.id);
+        const pixelSet = buildPixelSet(region.intervals);
+
+        for (const interval of region.intervals) {
+          for (let x = interval.x0; x < interval.x1; x += 1) {
+            const key = pixelKey(x, interval.y);
+            if (region.authoredPixels?.has(key)) {
+              setPixel(raster, model.canvasSize, x, interval.y, outlineOp.color);
+              continue;
+            }
+            const isBoundary = region.boundaryPixels
+              ? region.boundaryPixels.has(key)
+              : isBoundaryPixel(pixelSet, x, interval.y);
+            if (isBoundary) {
+              setPixel(raster, model.canvasSize, x, interval.y, outlineOp.color);
+            } else {
+              let sampleX = x;
+              let sampleY = interval.y;
+              if (fillOp.space === "Object") {
+                if (region.sourceByOutput?.has(key)) {
+                  const source = region.sourceByOutput.get(key);
+                  sampleX = source.x;
+                  sampleY = source.y;
+                } else if (region.inverseMap) {
+                  const source = region.inverseMap(x, interval.y);
+                  sampleX = Math.floor(source.x);
+                  sampleY = Math.floor(source.y);
+                }
+              }
+              const n = (hash2d(sampleX, sampleY, fillOp.seed + region.id * 31) % 10000) / 10000;
+              setPixel(raster, model.canvasSize, x, interval.y, n < fillOp.density ? fillOp.colorA : fillOp.colorB);
+            }
+          }
+        }
+
+        trace.push(`${tracePrefix}: stored ${region.type.toLowerCase()} as ${region.intervals.length} interval rows`);
+        trace.push(region.boundaryPixels
+          ? `Resolved same-color authored pixel boundary for region ${region.id}`
+          : `Resolved outline from interval boundary for region ${region.id}`);
+        trace.push(`Resolved dithered fill for region ${region.id} in ${fillOp.space.toLowerCase()} space`);
+      }
+
+      return {
+        raster,
+        bounds: boundsFromRaster(raster, model.canvasSize),
+        trace
+      };
+    }
+
+    function compileInput(model) {
+      return compileRegions(model, model.regions, "Input");
+    }
+
+    function compileOutput(model) {
+      const input = compileInput(model);
+      const rotate = model.operations[model.operations.length - 1];
+      if (rotate.angle === 0) {
+        return {
+          raster: input.raster.slice(),
+          bounds: input.bounds,
+          trace: input.trace.concat(["Rotation matrix is identity; output matches input"])
+        };
+      }
+
+      const raster = rotateRaster(input.raster, model.canvasSize, rotate.angle, rotate.pivot);
+      return {
+        raster,
+        bounds: boundsFromRaster(raster, model.canvasSize),
+        trace: input.trace.concat([
+          "Composed source sprite as colored pixels before rotation",
+          isOrthogonalRotation(rotate.angle)
+            ? "Used exact orthogonal raster sampling; preserved source colors"
+            : "Rotated composed raster artifact as the source of truth",
+          "Skipped primitive re-resolution after transform"
+        ])
+      };
+    }
+
+    function rastersEqual(a, b) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+
+    function drawGrid(ctx, size) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          ctx.fillStyle = ((x + y) % 2 === 0) ? "#f3f5f3" : "#e8ece8";
+          ctx.fillRect(x * scale, y * scale, scale, scale);
+        }
+      }
+      ctx.strokeStyle = "#d3d8d3";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= size; i += 1) {
+        ctx.beginPath();
+        ctx.moveTo(i * scale + 0.5, 0);
+        ctx.lineTo(i * scale + 0.5, size * scale);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i * scale + 0.5);
+        ctx.lineTo(size * scale, i * scale + 0.5);
+        ctx.stroke();
+      }
+    }
+
+    function drawRaster(canvas, model, compiled, showAnchors) {
+      const ctx = canvas.getContext("2d");
+      canvas.width = model.canvasSize * scale;
+      canvas.height = model.canvasSize * scale;
+      drawGrid(ctx, model.canvasSize);
+
+      for (let y = 0; y < model.canvasSize; y += 1) {
+        for (let x = 0; x < model.canvasSize; x += 1) {
+          const c = getPixel(compiled.raster, model.canvasSize, x, y);
+          if (c.a === 0) continue;
+          ctx.fillStyle = `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a / 255})`;
+          ctx.fillRect(x * scale, y * scale, scale, scale);
+        }
+      }
+
+      if (showAnchors) {
+        drawAnchor(ctx, model.anchors.pivot, "#ef4c52", "P");
+        drawAnchor(ctx, model.anchors.socket, "#2b90ff", "S");
+      }
+    }
+
+    function drawAnchor(ctx, point, color, label) {
+      const px = point.x * scale;
+      const py = point.y * scale;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(px, py, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(px - 10, py);
+      ctx.lineTo(px + 10, py);
+      ctx.moveTo(px, py - 10);
+      ctx.lineTo(px, py + 10);
+      ctx.stroke();
+      ctx.font = "bold 13px Arial";
+      ctx.fillText(label, px + 6, py - 6);
+    }
+
+    function renderOperations(model) {
+      els.operationList.innerHTML = "";
+      selectedOperation = clamp(selectedOperation, 0, Math.max(0, model.operations.length - 1));
+      model.operations.forEach((op, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = `${String(index + 1).padStart(2, "0")}. ${op.type} | ${op.summary}`;
+        option.selected = index === selectedOperation;
+        els.operationList.appendChild(option);
+      });
+    }
+
+    function renderPrimitives() {
+      const size = intValue(els.canvasSize, 16, 64);
+      els.primitiveList.innerHTML = "";
+      selectedPrimitive = clamp(selectedPrimitive, 0, Math.max(0, primitiveDrafts.length - 1));
+      primitiveDrafts.forEach((primitive, index) => {
+        const normalized = normalizePrimitive(primitive, size);
+        const option = document.createElement("option");
+        option.value = String(index);
+        const pixelText = normalized.type === "Pixels" ? `, pixels:${normalized.pixels.length}` : "";
+        option.textContent = `${String(index + 1).padStart(2, "0")}. ${normalized.type} | x:${normalized.x}, y:${normalized.y}, w:${normalized.w}, h:${normalized.h}${pixelText}`;
+        option.selected = index === selectedPrimitive;
+        els.primitiveList.appendChild(option);
+      });
+    }
+
+    function renderMath(model, input, output) {
+      const op = model.operations[selectedOperation] || model.operations[0];
+      const region = model.regions.find(item => item.id === op.regionId) || model.regions[0];
+      const inputBounds = input.bounds;
+      const outputBounds = output.bounds;
+
+      const lines = [
+        `Selected operation ${selectedOperation + 1}`,
+        `Type: ${op.type}`,
+        `Math: ${op.summary}`,
+        "",
+        "LiveSprite document truth",
+        `Engine version: ${model.engineVersion}`,
+        `Canvas: ${model.canvasSize}x${model.canvasSize}`,
+        `Regions: ${model.regions.length}`,
+        `Operations: ${model.operations.length}`,
+        `Input pixels: ${inputBounds.pixels}`,
+        `Input bounds: x:${inputBounds.x}..${inputBounds.x + inputBounds.w}, y:${inputBounds.y}..${inputBounds.y + inputBounds.h}, size:${inputBounds.w}x${inputBounds.h}`,
+        `Output pixels: ${outputBounds.pixels}`,
+        `Output bounds: x:${outputBounds.x}..${outputBounds.x + outputBounds.w}, y:${outputBounds.y}..${outputBounds.y + outputBounds.h}, size:${outputBounds.w}x${outputBounds.h}`,
+        "",
+        `Region ${region.id} intervals`,
+        `Primitive: ${primitiveSummary(region)}`,
+        `Interval rows: ${region.intervals.length}`,
+        `Resolved pixel area: ${region.bounds.pixels}`,
+        "",
+        "Operation stack"
+      ];
+
+      model.operations.forEach((item, index) => {
+        lines.push(`${index + 1}. ${item.type}`);
+        lines.push(`   ${item.summary}`);
+      });
+
+      lines.push("");
+      lines.push("Compile trace");
+      output.trace.forEach((entry, index) => lines.push(`${index + 1}. ${entry}`));
+
+      els.mathView.value = lines.join("\n");
+    }
+
+    function render() {
+      model = buildModel();
+      const input = compileInput(model);
+      const output = compileOutput(model);
+      const isIdentityOutput = rastersEqual(input.raster, output.raster);
+
+      drawRaster(els.inputCanvas, model, input, true);
+      drawRaster(els.outputCanvas, model, output, false);
+      renderPrimitives();
+      renderOperations(model);
+      renderMath(model, input, output);
+
+      els.inputStatus.textContent = `input source truth: ${input.bounds.pixels} pixels from ${model.operations.length} operations`;
+      els.outputStatus.textContent = isIdentityOutput
+        ? `compiled artifact: ${output.bounds.pixels} pixels; identity matrix, output equals input`
+        : `compiled artifact: ${output.bounds.pixels} pixels after transform resolution`;
+    }
+
+    function primitiveFromInputs() {
+      const size = intValue(els.canvasSize, 16, 64);
+      const x = intValue(els.rectX, 0, size - 1);
+      const y = intValue(els.rectY, 0, size - 1);
+      const w = intValue(els.rectW, 1, size - x);
+      const h = intValue(els.rectH, 1, size - y);
+      const type = els.primitiveType.value;
+      const existing = primitiveDrafts[selectedPrimitive];
+      if (type === "Pixels") {
+        const pixels = existing?.type === "Pixels" ? (existing.pixels || []) : [];
+        return { type, x, y, w, h, pixels };
+      }
+      return { type, x, y, w, h };
+    }
+
+    function loadPrimitiveIntoInputs(primitive) {
+      const size = intValue(els.canvasSize, 16, 64);
+      const normalized = normalizePrimitive(primitive, size);
+      els.primitiveType.value = normalized.type;
+      els.rectX.value = normalized.x;
+      els.rectY.value = normalized.y;
+      els.rectW.value = normalized.w;
+      els.rectH.value = normalized.h;
+    }
+
+    function toggleInputPixel(event) {
+      const current = primitiveDrafts[selectedPrimitive];
+      if (!current || current.type !== "Pixels") return;
+
+      const size = intValue(els.canvasSize, 16, 64);
+      const x = clamp(Math.floor(event.offsetX / els.inputCanvas.clientWidth * size), 0, size - 1);
+      const y = clamp(Math.floor(event.offsetY / els.inputCanvas.clientHeight * size), 0, size - 1);
+      const normalized = normalizePrimitive(current, size);
+      const pixels = normalized.pixels.slice();
+      const index = pixels.findIndex(pixel => pixel.x === x && pixel.y === y);
+      if (index >= 0) {
+        pixels.splice(index, 1);
+      } else {
+        pixels.push({ x, y });
+      }
+
+      const bounds = pixels.length
+        ? {
+            x: Math.min(...pixels.map(pixel => pixel.x)),
+            y: Math.min(...pixels.map(pixel => pixel.y)),
+            w: Math.max(...pixels.map(pixel => pixel.x)) - Math.min(...pixels.map(pixel => pixel.x)) + 1,
+            h: Math.max(...pixels.map(pixel => pixel.y)) - Math.min(...pixels.map(pixel => pixel.y)) + 1
+          }
+        : { x, y, w: 1, h: 1 };
+      primitiveDrafts[selectedPrimitive] = { type: "Pixels", ...bounds, pixels };
+      loadPrimitiveIntoInputs(primitiveDrafts[selectedPrimitive]);
+      render();
+    }
+
+    function addPrimitive() {
+      primitiveDrafts.push(primitiveFromInputs());
+      selectedPrimitive = primitiveDrafts.length - 1;
+      selectedOperation = selectedPrimitive * 3;
+      render();
+    }
+
+    function removeSelectedPrimitive() {
+      if (primitiveDrafts.length <= 1) return;
+      primitiveDrafts.splice(selectedPrimitive, 1);
+      selectedPrimitive = clamp(selectedPrimitive, 0, primitiveDrafts.length - 1);
+      selectedOperation = clamp(selectedOperation, 0, Math.max(0, primitiveDrafts.length * 3));
+      loadPrimitiveIntoInputs(primitiveDrafts[selectedPrimitive]);
+      render();
+    }
+
+    function updateSelectedPrimitiveFromInputs() {
+      if (!primitiveDrafts[selectedPrimitive]) return;
+      primitiveDrafts[selectedPrimitive] = primitiveFromInputs();
+      render();
+    }
+
+    function reset() {
+      primitiveDrafts = [
+        { type: "Rectangle", x: 9, y: 8, w: 10, h: 17 }
+      ];
+      selectedPrimitive = 0;
+      els.rectX.value = 9;
+      els.rectY.value = 8;
+      els.rectW.value = 10;
+      els.rectH.value = 17;
+      els.primitiveType.value = "Rectangle";
+      els.rotation.value = 25;
+      els.density.value = 0.5;
+      els.seed.value = 17;
+      els.ditherSpace.value = "Object";
+      els.fillA.value = "#ef4c52";
+      els.fillB.value = "#ffbe39";
+      els.outline.value = "#181f27";
+      els.canvasSize.value = 32;
+      selectedOperation = 0;
+      render();
+    }
+
+    els.compileBtn.addEventListener("click", render);
+    els.inputCanvas.addEventListener("click", toggleInputPixel);
+    els.resetBtn.addEventListener("click", reset);
+    els.addPrimitiveBtn.addEventListener("click", addPrimitive);
+    els.removePrimitiveBtn.addEventListener("click", removeSelectedPrimitive);
+    els.primitiveList.addEventListener("change", () => {
+      selectedPrimitive = parseInt(els.primitiveList.value, 10) || 0;
+      loadPrimitiveIntoInputs(primitiveDrafts[selectedPrimitive]);
+      selectedOperation = selectedPrimitive * 3;
+      render();
+    });
+    els.operationList.addEventListener("change", () => {
+      selectedOperation = parseInt(els.operationList.value, 10) || 0;
+      render();
+    });
+
+    for (const el of [els.primitiveType, els.rectX, els.rectY, els.rectW, els.rectH]) {
+      el.addEventListener("input", updateSelectedPrimitiveFromInputs);
+    }
+    els.primitiveType.addEventListener("change", updateSelectedPrimitiveFromInputs);
+
+    for (const el of [els.rotation, els.density, els.seed, els.ditherSpace, els.fillA, els.fillB, els.outline, els.canvasSize]) {
+      el.addEventListener("input", render);
+    }
+    els.ditherSpace.addEventListener("change", render);
+
+    render();
+  </script>
+</body>
+</html>
