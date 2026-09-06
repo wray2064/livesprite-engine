@@ -53,13 +53,21 @@ struct FillRampOp {
     float           opacity         = 1.f;
 };
 
+// Dither resolves a value against a threshold pattern, then picks between the
+// two ramp stops that value falls between. With a two stop ramp and a constant
+// density that is classic two tone dithering; with a multi stop ramp and a
+// modulated value it is a dithered gradient.
 struct FillDitherOp {
     RegionId        targetRegion;
     RampId          ramp;
     PatternId       pattern;
-    float           density         = 0.5f;        // [0..1]
+    float           density         = 0.5f;        // [0..1], used when modulation is Constant
+    DitherModulation modulation     = DitherModulation::Constant;
+    Vec2f           gradientStart;                 // Linear: axis start. Radial/Angular: centre.
+    Vec2f           gradientEnd     = {1.f, 0.f};  // Linear: axis end. Radial: rim. Angular: reference.
     float           phase           = 0.f;         // pattern phase offset
-    CoordinateSpace coordinateSpace = CoordinateSpace::Object;
+    PatternAnchor   anchor          = PatternAnchor::Local;
+    CoordinateSpace coordinateSpace = CoordinateSpace::Object;   // frame for the gradient points
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;
 };
@@ -69,6 +77,7 @@ struct FillNoiseOp {
     RampId          ramp;
     float           scale           = 1.f;
     float           seed            = 0.f;
+    PatternAnchor   anchor          = PatternAnchor::Local;
     CoordinateSpace coordinateSpace = CoordinateSpace::Object;
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;
@@ -81,11 +90,15 @@ struct FillLinePatternOp {
     float           spacing         = 4.f;         // pixels between lines
     float           angle           = 45.f;        // degrees
     float           lineWidth       = 1.f;
+    PatternAnchor   anchor          = PatternAnchor::Local;
     CoordinateSpace coordinateSpace = CoordinateSpace::Object;
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;
 };
 
+// Tiles a pattern across a region. A pattern carrying its own colours paints
+// them directly, which is how a tileable texture fill works; a pattern that is
+// only a threshold tile paints the foreground and background roles instead.
 struct FillTexturePatternOp {
     RegionId        targetRegion;
     PatternId       pattern;
@@ -94,6 +107,7 @@ struct FillTexturePatternOp {
     Vec2f           scale           = {1.f, 1.f};
     Vec2f           offset;
     float           angle           = 0.f;
+    PatternAnchor   anchor          = PatternAnchor::Local;
     CoordinateSpace coordinateSpace = CoordinateSpace::Object;
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;

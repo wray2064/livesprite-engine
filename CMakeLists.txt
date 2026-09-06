@@ -56,6 +56,10 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_serialize_tests PRIVATE livesprite)
     add_test(NAME livesprite_serialize COMMAND livesprite_serialize_tests)
 
+    add_executable(livesprite_dither_tests tests/dither_tests.cpp)
+    target_link_libraries(livesprite_dither_tests PRIVATE livesprite)
+    add_test(NAME livesprite_dither COMMAND livesprite_dither_tests)
+
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)
     add_test(NAME livesprite_plugin COMMAND livesprite_plugin_tests)

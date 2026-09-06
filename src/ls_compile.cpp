@@ -685,37 +685,173 @@ Color sampleRampData(const RampData* ramp, float t, Color fallback) {
     return stops.back().color;
 }
 
-// Normalized pattern threshold in [0,1) at a pixel, in the pattern space.
-float patternThreshold(const PatternData* pattern, int32_t x, int32_t y, Vec2f origin, float phase) {
+// What a pattern says at a pixel: the threshold rank it carries, and the colour
+// it holds if the tile is a colour texture rather than a bare dither matrix.
+struct PatternSample {
+    float threshold = 0.5f;
+    bool  hasColor  = false;
+    Color color;
+};
+
+// Sample a tile at a pixel, honouring the pattern origin, an extra phase, a
+// scale and a rotation. The origin is what the anchor modes move: everything
+// else here is tile-local arithmetic.
+PatternSample samplePattern(const PatternData* pattern, float x, float y, Vec2f origin,
+                            float phase, Vec2f scale = {1.f, 1.f}, float angleDegrees = 0.f) {
+    PatternSample sample;
+
+    float localX = x - origin.x - phase;
+    float localY = y - origin.y;
+    if (pattern != nullptr) {
+        localX -= pattern->desc.phase.x;
+        localY -= pattern->desc.phase.y;
+    }
+    if (angleDegrees != 0.f) {
+        const float radians = -angleDegrees * kPi / 180.f;
+        const float c = std::cos(radians);
+        const float s = std::sin(radians);
+        const float rotatedX = c * localX - s * localY;
+        const float rotatedY = s * localX + c * localY;
+        localX = rotatedX;
+        localY = rotatedY;
+    }
+    const float safeScaleX = std::fabs(scale.x) < 0.0001f ? 1.f : scale.x;
+    const float safeScaleY = std::fabs(scale.y) < 0.0001f ? 1.f : scale.y;
+    localX /= safeScaleX;
+    localY /= safeScaleY;
+
     if (pattern == nullptr || pattern->desc.mask.empty()) {
         // No pattern bound: fall back to an ordered 4x4 Bayer matrix so a
         // dither fill still produces a stable, non-random pattern.
         static const uint8_t kBayer4[16] = {
             0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5
         };
-        const int32_t px = ((x % 4) + 4) % 4;
-        const int32_t py = ((y % 4) + 4) % 4;
-        return (static_cast<float>(kBayer4[py * 4 + px]) + 0.5f) / 16.f;
+        const int32_t px = ((static_cast<int32_t>(std::floor(localX)) % 4) + 4) % 4;
+        const int32_t py = ((static_cast<int32_t>(std::floor(localY)) % 4) + 4) % 4;
+        sample.threshold = (static_cast<float>(kBayer4[py * 4 + px]) + 0.5f) / 16.f;
+        return sample;
     }
 
     const int32_t tileW = static_cast<int32_t>(pattern->desc.tileWidth);
     const int32_t tileH = static_cast<int32_t>(pattern->desc.tileHeight);
-    const int32_t localX = x - static_cast<int32_t>(std::floor(origin.x + pattern->desc.phase.x + phase));
-    const int32_t localY = y - static_cast<int32_t>(std::floor(origin.y + pattern->desc.phase.y));
-    const int32_t px = ((localX % tileW) + tileW) % tileW;
-    const int32_t py = ((localY % tileH) + tileH) % tileH;
-    const uint8_t rank = pattern->desc.mask[static_cast<size_t>(py) * tileW + px];
+    const int32_t px = ((static_cast<int32_t>(std::floor(localX)) % tileW) + tileW) % tileW;
+    const int32_t py = ((static_cast<int32_t>(std::floor(localY)) % tileH) + tileH) % tileH;
+    const size_t index = static_cast<size_t>(py) * tileW + px;
+
+    const uint8_t rank = pattern->desc.mask[index];
     const float levels = static_cast<float>(std::max<uint32_t>(2, pattern->desc.levels));
-    return (static_cast<float>(rank) + 0.5f) / levels;
+    sample.threshold = (static_cast<float>(rank) + 0.5f) / levels;
+
+    if (index < pattern->desc.colors.size()) {
+        sample.hasColor = true;
+        sample.color = pattern->desc.colors[index];
+    }
+    return sample;
+}
+
+// The value a dither resolves against. Constant is a flat density; the others
+// vary across the fill, which is what turns a dither into a gradient.
+float modulationValue(DitherModulation modulation, float density,
+                      float x, float y, Vec2f origin, Vec2f start, Vec2f end) {
+    if (modulation == DitherModulation::Constant) {
+        return clamp01(density);
+    }
+
+    // Gradient geometry is stated in the same frame as the pattern origin, so a
+    // gradient travels with its pattern under every anchor mode.
+    const float px = x - origin.x;
+    const float py = y - origin.y;
+    const float dx = end.x - start.x;
+    const float dy = end.y - start.y;
+
+    switch (modulation) {
+        case DitherModulation::Linear: {
+            const float lengthSq = dx * dx + dy * dy;
+            if (lengthSq < 0.0001f) {
+                return clamp01(density);
+            }
+            return clamp01(((px - start.x) * dx + (py - start.y) * dy) / lengthSq);
+        }
+        case DitherModulation::Radial: {
+            const float radius = std::sqrt(dx * dx + dy * dy);
+            if (radius < 0.0001f) {
+                return clamp01(density);
+            }
+            const float distance = std::sqrt((px - start.x) * (px - start.x) +
+                                             (py - start.y) * (py - start.y));
+            return clamp01(distance / radius);
+        }
+        case DitherModulation::Angular: {
+            const float reference = std::atan2(dy, dx);
+            float angle = std::atan2(py - start.y, px - start.x) - reference;
+            while (angle < 0.f)          { angle += 2.f * kPi; }
+            while (angle >= 2.f * kPi)   { angle -= 2.f * kPi; }
+            return clamp01(angle / (2.f * kPi));
+        }
+        case DitherModulation::Constant:
+        default:
+            return clamp01(density);
+    }
+}
+
+// Pick a colour by dithering between the two ramp stops the value falls
+// between. Two stops plus a constant value is classic two-tone dithering; more
+// stops and a modulated value is a dithered gradient, one band per stop pair.
+Color ditherRampColor(const RampData* ramp, float value, float threshold) {
+    if (ramp == nullptr || ramp->desc.stops.empty()) {
+        return value > threshold ? Color::white() : Color::black();
+    }
+    const std::vector<RampStop>& stops = ramp->desc.stops;
+    if (stops.size() == 1) {
+        return stops.front().color;
+    }
+
+    const float scaled = clamp01(value) * static_cast<float>(stops.size() - 1);
+    const size_t lower = std::min(static_cast<size_t>(scaled), stops.size() - 2);
+    const float fraction = scaled - static_cast<float>(lower);
+    return fraction > threshold ? stops[lower + 1].color : stops[lower].color;
+}
+
+// Legacy helper kept for the fills that only need a threshold.
+float patternThreshold(const PatternData* pattern, int32_t x, int32_t y, Vec2f origin, float phase) {
+    return samplePattern(pattern, static_cast<float>(x), static_cast<float>(y),
+                         origin, phase).threshold;
 }
 
 // A mark: coverage plus a per-pixel colour function, ready to composite.
+//
+// A patterned mark also records how it is anchored. Local marks are finished at
+// paint time and simply ride the transforms with the pixels they painted.
+// Global and Fixed marks are re-resolved after the transform stack, so they
+// keep their own frame instead of inheriting the rotation of the content.
 struct Mark {
     IntervalSet coverage;
     std::function<Color(int32_t, int32_t)> color;
     BlendMode blend = BlendMode::Normal;
     float opacity = 1.f;
+
+    PatternAnchor anchor = PatternAnchor::Local;
+    Vec2f patternOrigin;
+    std::function<Color(int32_t, int32_t, Vec2f)> evaluateAt;   // set when anchor is not Local
 };
+
+// Where a pattern lattice is pinned.
+Vec2f patternOriginFor(const CompileEnv& env, PatternAnchor anchor, CoordinateSpace space,
+                       const IntervalSet& coverage) {
+    switch (anchor) {
+        case PatternAnchor::Local:
+            return spaceOrigin(env, space, coverage);
+        case PatternAnchor::Global: {
+            // Travels with the object: the origin starts on the shape and is
+            // carried through each transform, while the lattice axes stay put.
+            const Rect2i box = geom::bounds(coverage);
+            return { static_cast<float>(box.min.x), static_cast<float>(box.min.y) };
+        }
+        case PatternAnchor::Fixed:
+        default:
+            return { 0.f, 0.f };
+    }
+}
 
 void compositeMark(RasterBuffer& target, const Mark& mark) {
     for (const Interval& interval : mark.coverage.intervals) {
@@ -852,8 +988,31 @@ IntervalSet outlineOf(const IntervalSet& coverage, float thickness, OutlineSide 
 namespace {
 
 // Resolve one transform or deform operation against the layer colour field.
+// Provenance tags travel in a parallel raster: tag colours encode which mark
+// owns a pixel. Coverage decisions inside a transform depend only on alpha, so
+// pushing the tag plane through the same call keeps the two in lockstep.
+Color encodeTag(uint32_t tag) {
+    return { static_cast<uint8_t>((tag >> 16) & 0xffu),
+             static_cast<uint8_t>((tag >> 8) & 0xffu),
+             static_cast<uint8_t>(tag & 0xffu),
+             255 };
+}
+
+uint32_t decodeTag(Color color) {
+    if (color.a == 0) {
+        return 0;
+    }
+    return (static_cast<uint32_t>(color.r) << 16) |
+           (static_cast<uint32_t>(color.g) << 8) |
+            static_cast<uint32_t>(color.b);
+}
+
+// `mapPoint`, when given, receives how this operation moves a point. Affine
+// operations report their matrix exactly. A free-form deform reports nothing,
+// so a Global pattern origin stays where the deform found it.
 RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
-                                     const RasterBuffer& source) {
+                                     const RasterBuffer& source,
+                                     std::function<Vec2f(Vec2f)>* mapPoint = nullptr) {
     auto pivotOf = [&](PivotId pivot, Vec2f fallback) -> Vec2f {
         if (const PivotData* data = env.impl->findPivot(pivot)) {
             return data->position;
@@ -912,6 +1071,9 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     };
 
     auto runMatrix = [&](const Mat3f& matrix, RegionId targetRegion, SamplingPolicy sampling) {
+        if (mapPoint != nullptr) {
+            *mapPoint = [matrix](Vec2f point) { return matrix.transformPoint(point); };
+        }
         const RasterBuffer input = targetRegion.valid() ? isolate(targetRegion) : source;
         RasterBuffer moved = transformRaster(input, matrix, sampling,
                                             env.profile.coverageThreshold, env.samplePolicy);
@@ -1275,18 +1437,27 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         }
         const RampData* ramp = env.impl->findRamp(fill->ramp);
         const PatternData* pattern = env.impl->findPattern(fill->pattern);
-        const Vec2f origin = spaceOrigin(env, fill->coordinateSpace, *coverage);
         const float density = clamp01(fill->density);
         const float phase = fill->phase;
+        const DitherModulation modulation = fill->modulation;
+        const Vec2f gradientStart = fill->gradientStart;
+        const Vec2f gradientEnd = fill->gradientEnd;
 
         out.coverage = *coverage;
-        out.color = [ramp, pattern, origin, density, phase](int32_t x, int32_t y) {
-            const float threshold = patternThreshold(pattern, x, y, origin, phase);
-            // Two-tone by default: the ramp ends supply the pair, and density
-            // decides how often the upper tone wins.
-            return sampleRampData(ramp, density > threshold ? 1.f : 0.f,
-                                  density > threshold ? Color::white() : Color::black());
+        out.anchor = fill->anchor;
+        out.patternOrigin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
+        out.evaluateAt = [ramp, pattern, density, phase, modulation,
+                          gradientStart, gradientEnd](int32_t x, int32_t y, Vec2f origin) {
+            const float px = static_cast<float>(x) + 0.5f;
+            const float py = static_cast<float>(y) + 0.5f;
+            const float threshold = samplePattern(pattern, px, py, origin, phase).threshold;
+            const float value = modulationValue(modulation, density, px, py,
+                                                origin, gradientStart, gradientEnd);
+            return ditherRampColor(ramp, value, threshold);
         };
+        const auto evaluate = out.evaluateAt;
+        const Vec2f origin = out.patternOrigin;
+        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -1347,17 +1518,21 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             return false;
         }
         const RampData* ramp = env.impl->findRamp(fill->ramp);
-        const Vec2f origin = spaceOrigin(env, fill->coordinateSpace, *coverage);
         const uint32_t seed = static_cast<uint32_t>(fill->seed);
         const float scale = std::max(0.0001f, fill->scale);
 
         out.coverage = *coverage;
-        out.color = [ramp, origin, seed, scale](int32_t x, int32_t y) {
+        out.anchor = fill->anchor;
+        out.patternOrigin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
+        out.evaluateAt = [ramp, seed, scale](int32_t x, int32_t y, Vec2f origin) {
             const int32_t sx = static_cast<int32_t>(std::floor((static_cast<float>(x) - origin.x) / scale));
             const int32_t sy = static_cast<int32_t>(std::floor((static_cast<float>(y) - origin.y) / scale));
             const float t = static_cast<float>(stableHash(sx, sy, seed) % 10000u) / 10000.f;
             return sampleRampData(ramp, t, Color::white());
         };
+        const auto evaluate = out.evaluateAt;
+        const Vec2f origin = out.patternOrigin;
+        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -1367,7 +1542,6 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const Vec2f origin = spaceOrigin(env, fill->coordinateSpace, *coverage);
         const Color lineColor = env.role(fill->lineRole, Color::black());
         const Color bgColor = env.role(fill->bgRole, Color::transparent());
         const float radians = fill->angle * kPi / 180.f;
@@ -1377,13 +1551,19 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const float lineWidth = std::max(0.f, fill->lineWidth);
 
         out.coverage = *coverage;
-        out.color = [origin, lineColor, bgColor, nx, ny, spacing, lineWidth](int32_t x, int32_t y) {
+        out.anchor = fill->anchor;
+        out.patternOrigin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
+        out.evaluateAt = [lineColor, bgColor, nx, ny, spacing, lineWidth](
+                             int32_t x, int32_t y, Vec2f origin) {
             const float px = static_cast<float>(x) + 0.5f - origin.x;
             const float py = static_cast<float>(y) + 0.5f - origin.y;
             const float projected = px * nx + py * ny;
-            const float phase = projected - std::floor(projected / spacing) * spacing;
-            return phase < lineWidth ? lineColor : bgColor;
+            const float offset = projected - std::floor(projected / spacing) * spacing;
+            return offset < lineWidth ? lineColor : bgColor;
         };
+        const auto evaluate = out.evaluateAt;
+        const Vec2f origin = out.patternOrigin;
+        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -1394,16 +1574,32 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             return false;
         }
         const PatternData* pattern = env.impl->findPattern(fill->pattern);
-        const Vec2f base = spaceOrigin(env, fill->coordinateSpace, *coverage);
-        const Vec2f origin { base.x + fill->offset.x, base.y + fill->offset.y };
         const Color foreground = env.role(fill->foregroundRole, Color::white());
         const Color background = env.role(fill->backgroundRole, Color::transparent());
+        const Vec2f scale = fill->scale;
+        const Vec2f offset = fill->offset;
+        const float angle = fill->angle;
 
         out.coverage = *coverage;
-        out.color = [pattern, origin, foreground, background](int32_t x, int32_t y) {
-            const float threshold = patternThreshold(pattern, x, y, origin, 0.f);
-            return threshold < 0.5f ? foreground : background;
+        out.anchor = fill->anchor;
+        const Vec2f base = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
+        out.patternOrigin = { base.x + offset.x, base.y + offset.y };
+        out.evaluateAt = [pattern, foreground, background, scale, angle](
+                             int32_t x, int32_t y, Vec2f origin) {
+            const PatternSample sample = samplePattern(pattern,
+                                                       static_cast<float>(x) + 0.5f,
+                                                       static_cast<float>(y) + 0.5f,
+                                                       origin, 0.f, scale, angle);
+            // A tile carrying colours is a texture; a bare threshold tile
+            // resolves to the foreground and background roles instead.
+            if (sample.hasColor) {
+                return sample.color;
+            }
+            return sample.threshold < 0.5f ? foreground : background;
         };
+        const auto evaluate = out.evaluateAt;
+        const Vec2f origin = out.patternOrigin;
+        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -1678,6 +1874,66 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
     };
     std::map<uint64_t, ResolvedMark> history;
 
+    // Patterns anchored Global or Fixed are re-resolved once the transform
+    // stack has run. Until then their pixels are marked in a tag plane so they
+    // can be found again after the content has moved.
+    struct DeferredFill {
+        uint32_t tag = 0;
+        PatternAnchor anchor = PatternAnchor::Global;
+        Vec2f origin;
+        std::function<Color(int32_t, int32_t, Vec2f)> evaluate;
+    };
+    std::vector<DeferredFill> deferred;
+    RasterBuffer tagPlane;
+    uint32_t nextTag = 1;
+
+    auto ensureTagPlane = [&]() {
+        if (tagPlane.empty()) {
+            auto allocatedTags = allocateRaster(resolved.outputWidth, resolved.outputHeight);
+            if (allocatedTags.ok()) {
+                tagPlane = std::move(allocatedTags.value);
+            }
+        }
+        return !tagPlane.empty();
+    };
+
+    // Every mark stamps the tag plane, so a later mark painting over a deferred
+    // fill takes ownership of those pixels away from it.
+    auto stampTags = [&](const IntervalSet& coverage, uint32_t tag) {
+        if (tagPlane.empty()) {
+            return;
+        }
+        for (const Interval& interval : coverage.intervals) {
+            for (int32_t x = interval.x0; x < interval.x1; ++x) {
+                const Color painted = getRasterPixel(result.raster, x, interval.y);
+                setRasterPixel(tagPlane, x, interval.y,
+                               painted.a == 0 ? Color::transparent() : encodeTag(tag));
+            }
+        }
+    };
+
+    // The tag plane must carry the same alpha as the colour plane for the two
+    // to make identical coverage decisions inside a transform.
+    auto syncTagAlpha = [&]() {
+        if (tagPlane.empty()) {
+            return;
+        }
+        for (uint32_t y = 0; y < tagPlane.height; ++y) {
+            uint8_t* tagRow = tagPlane.row(y);
+            const uint8_t* colorRow = result.raster.row(y);
+            for (uint32_t x = 0; x < tagPlane.width; ++x) {
+                if (colorRow[x * 4 + 3] == 0) {
+                    tagRow[x * 4 + 0] = 0;
+                    tagRow[x * 4 + 1] = 0;
+                    tagRow[x * 4 + 2] = 0;
+                    tagRow[x * 4 + 3] = 0;
+                } else {
+                    tagRow[x * 4 + 3] = 255;
+                }
+            }
+        }
+    };
+
     for (OperationId opId : layer->operations) {
         const OperationData* data = impl_->findOperation(opId);
         if (data == nullptr) {
@@ -1779,7 +2035,28 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
                 env.note("op " + std::to_string(opId.value) + ": transform recorded, not resolved");
                 continue;
             }
-            result.raster = applyTransformOperation(env, data->op, result.raster);
+            std::function<Vec2f(Vec2f)> mapPoint;
+            syncTagAlpha();
+            result.raster = applyTransformOperation(env, data->op, result.raster, &mapPoint);
+
+            if (!deferred.empty() && !tagPlane.empty()) {
+                // Carry provenance with the pixels. The tag pass runs without a
+                // sampling policy: a policy chooses colours, not owners.
+                CompileEnv tagEnv = env;
+                tagEnv.samplePolicy = {};
+                tagEnv.trace = nullptr;
+                tagPlane = applyTransformOperation(tagEnv, data->op, tagPlane);
+
+                // A Global pattern travels with its object, so its origin moves
+                // with the content. A Fixed pattern never moves.
+                if (mapPoint) {
+                    for (DeferredFill& fill : deferred) {
+                        if (fill.anchor == PatternAnchor::Global) {
+                            fill.origin = mapPoint(fill.origin);
+                        }
+                    }
+                }
+            }
             env.note("op " + std::to_string(opId.value) + ": resolved " +
                      std::string(operationTypeName(data->op)) + " over layer content");
             continue;
@@ -1905,9 +2182,52 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
                                                 mark.color(sample.x0, sample.y),
                                                 mark.blend, mark.opacity };
         }
+
+        const bool deferrable = mark.anchor != PatternAnchor::Local && mark.evaluateAt &&
+                                !mark.coverage.empty();
+        if (deferrable && ensureTagPlane()) {
+            DeferredFill fill;
+            fill.tag = nextTag++;
+            fill.anchor = mark.anchor;
+            fill.origin = mark.patternOrigin;
+            fill.evaluate = mark.evaluateAt;
+            deferred.push_back(std::move(fill));
+            stampTags(mark.coverage, deferred.back().tag);
+            env.note("op " + std::to_string(opId.value) + ": pattern anchored " +
+                     (mark.anchor == PatternAnchor::Global ? "global" : "fixed") +
+                     ", deferred to after transforms");
+        } else if (!tagPlane.empty()) {
+            stampTags(mark.coverage, 0);
+        }
         env.note("op " + std::to_string(opId.value) + ": rasterized " +
                  std::string(operationTypeName(data->op)) + " over " +
                  std::to_string(geom::pixelCount(mark.coverage)) + " px");
+    }
+
+    // Re-resolve anchored patterns now that the content has finished moving.
+    // Coverage, alpha and blending were settled at paint time; only the colour
+    // is recomputed, in the frame the anchor asked for.
+    if (!deferred.empty() && !tagPlane.empty()) {
+        syncTagAlpha();
+        for (const DeferredFill& fill : deferred) {
+            int64_t repainted = 0;
+            for (int32_t y = 0; y < static_cast<int32_t>(result.raster.height); ++y) {
+                for (int32_t x = 0; x < static_cast<int32_t>(result.raster.width); ++x) {
+                    if (decodeTag(getRasterPixel(tagPlane, x, y)) != fill.tag) {
+                        continue;
+                    }
+                    const Color painted = getRasterPixel(result.raster, x, y);
+                    if (painted.a == 0) {
+                        continue;
+                    }
+                    Color resolvedColor = fill.evaluate(x, y, fill.origin);
+                    resolvedColor.a = painted.a;
+                    setRasterPixel(result.raster, x, y, resolvedColor);
+                    ++repainted;
+                }
+            }
+            env.note("re-resolved anchored pattern over " + std::to_string(repainted) + " px");
+        }
     }
 
     // Layer mask: only the mask region survives.

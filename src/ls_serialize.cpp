@@ -372,17 +372,19 @@ template<typename Ar> void mapOp(Ar& ar, FillRampOp& op) {
     F(targetRegion) F(ramp) F(angle) F(coordinateSpace) F(blend) F(opacity)
 }
 template<typename Ar> void mapOp(Ar& ar, FillDitherOp& op) {
-    F(targetRegion) F(ramp) F(pattern) F(density) F(phase) F(coordinateSpace) F(blend) F(opacity)
+    F(targetRegion) F(ramp) F(pattern) F(density) F(modulation) F(gradientStart) F(gradientEnd)
+    F(phase) F(anchor) F(coordinateSpace) F(blend) F(opacity)
 }
 template<typename Ar> void mapOp(Ar& ar, FillNoiseOp& op) {
-    F(targetRegion) F(ramp) F(scale) F(seed) F(coordinateSpace) F(blend) F(opacity)
+    F(targetRegion) F(ramp) F(scale) F(seed) F(anchor) F(coordinateSpace) F(blend) F(opacity)
 }
 template<typename Ar> void mapOp(Ar& ar, FillLinePatternOp& op) {
-    F(targetRegion) F(lineRole) F(bgRole) F(spacing) F(angle) F(lineWidth) F(coordinateSpace) F(blend) F(opacity)
+    F(targetRegion) F(lineRole) F(bgRole) F(spacing) F(angle) F(lineWidth) F(anchor)
+    F(coordinateSpace) F(blend) F(opacity)
 }
 template<typename Ar> void mapOp(Ar& ar, FillTexturePatternOp& op) {
     F(targetRegion) F(pattern) F(foregroundRole) F(backgroundRole) F(scale) F(offset) F(angle)
-    F(coordinateSpace) F(blend) F(opacity)
+    F(anchor) F(coordinateSpace) F(blend) F(opacity)
 }
 template<typename Ar> void mapOp(Ar& ar, FillSemanticColorOp& op) {
     F(targetRegion) F(paletteRole) F(blend) F(opacity)
@@ -841,6 +843,9 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
             mask.push(enc(static_cast<uint32_t>(cell)));
         }
         obj["mask"] = std::move(mask);
+        if (!data->desc.colors.empty()) {
+            obj["colors"] = enc(data->desc.colors);
+        }
         patterns.push(std::move(obj));
     }
     root["patterns"] = std::move(patterns);
@@ -1159,6 +1164,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             for (uint32_t cell : mask) {
                 pattern.desc.mask.push_back(static_cast<uint8_t>(cell));
             }
+            reader.field("colors", pattern.desc.colors);
             impl.patterns.emplace(id, std::move(pattern));
             stored.patterns.push_back(PatternId{id});
         }

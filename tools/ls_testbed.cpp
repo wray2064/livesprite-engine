@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -624,6 +625,257 @@ Scene sceneRoundTrip(const Options& options) {
     return scene;
 }
 
+Scene sceneDitheredGradients(const Options& options) {
+    (void)options;
+    Scene scene;
+    scene.id = "gradients";
+    scene.title = "Gradients made of dithered colour";
+    scene.blurb = "A three stop ramp resolved through a dither pattern. The value being dithered "
+                  "varies across the shape, so the fill walks from one ramp stop to the next in "
+                  "bands of mixed pixels. No colour outside the ramp is ever produced.";
+
+    auto ctx = LSContext::create();
+    const uint32_t size = 40;
+
+    struct Variant { const char* name; DitherModulation modulation; DitherPatternKind pattern; };
+    const Variant variants[] = {
+        {"linear, bayer8",   DitherModulation::Linear,  DitherPatternKind::Bayer8},
+        {"radial, clustered", DitherModulation::Radial, DitherPatternKind::ClusteredDot},
+        {"angular, dots",    DitherModulation::Angular, DitherPatternKind::Dots},
+        {"linear, crosshatch", DitherModulation::Linear, DitherPatternKind::CrossHatch},
+    };
+
+    for (const Variant& variant : variants) {
+        Stage stage = makeStage(*ctx, size, "gradient");
+        const GeometryId shape = ctx->createRect(stage.doc, {{6.f, 6.f}, 28.f, 28.f, 4.f}).value;
+        const RegionId region = ctx->createRegionFromGeometry(shape).value;
+        const RampId ramp = ctx->createRamp(stage.doc, {"tone", {
+            {0.f,  {36, 40, 72, 255}},
+            {0.5f, {118, 132, 178, 255}},
+            {1.f,  {226, 234, 252, 255}}}, true}).value;
+
+        FillDitherOp dither;
+        dither.targetRegion = region;
+        dither.ramp = ramp;
+        dither.pattern = ctx->createDitherPattern(stage.doc, variant.pattern).value;
+        dither.modulation = variant.modulation;
+        if (variant.modulation == DitherModulation::Linear) {
+            dither.gradientStart = {0.f, 0.f};
+            dither.gradientEnd = {28.f, 28.f};
+        } else {
+            dither.gradientStart = {14.f, 14.f};
+            dither.gradientEnd = {28.f, 14.f};
+        }
+        ctx->addOperation(stage.layer, dither);
+
+        auto compiled = ctx->compileSprite(stage.sprite, profileFor(size));
+        scene.panels.push_back({variant.name, pixels(compiled.value.raster),
+                                compiled.value.raster, "", ""});
+    }
+
+    // The claim worth checking: a dithered gradient uses only ramp colours.
+    std::set<uint32_t> distinct;
+    const RasterBuffer& first = scene.panels.front().raster;
+    for (uint32_t y = 0; y < first.height; ++y) {
+        for (uint32_t x = 0; x < first.width; ++x) {
+            const Color color = readPixel(first, static_cast<int32_t>(x), static_cast<int32_t>(y));
+            if (color.a == 0) {
+                continue;
+            }
+            distinct.insert((static_cast<uint32_t>(color.r) << 16) |
+                            (static_cast<uint32_t>(color.g) << 8) | color.b);
+        }
+    }
+    scene.verdict = distinct.size() == 3
+        ? "the linear panel holds exactly the 3 ramp stops, mixed by the pattern"
+        : "MISMATCH: expected 3 ramp colours, found " + std::to_string(distinct.size());
+    return scene;
+}
+
+Scene scenePatternLibrary(const Options& options) {
+    Scene scene;
+    scene.id = "library";
+    scene.title = "The prebaked pattern library";
+    scene.blurb = "Every kind the engine ships, filled at one density. These are threshold "
+                  "matrices rather than stamps, so the same tile serves every density and every "
+                  "step of a gradient. External tiles register the same way.";
+
+    auto ctx = LSContext::create();
+    const uint32_t size = 24;
+
+    auto probe = LSContext::create();
+    for (DitherPatternKind kind : probe->ditherPatternKinds()) {
+        Stage stage = makeStage(*ctx, size, "library");
+        const GeometryId shape = ctx->createRect(stage.doc, {{2.f, 2.f}, 20.f, 20.f, 0.f}).value;
+        const RegionId region = ctx->createRegionFromGeometry(shape).value;
+
+        FillDitherOp dither;
+        dither.targetRegion = region;
+        dither.ramp = ctx->createRamp(stage.doc,
+            {"two", {{0.f, {32, 36, 58, 255}}, {1.f, {228, 232, 248, 255}}}, true}).value;
+        dither.pattern = ctx->createDitherPattern(stage.doc, kind).value;
+        dither.density = options.density;
+        ctx->addOperation(stage.layer, dither);
+
+        auto compiled = ctx->compileSprite(stage.sprite, profileFor(size));
+        scene.panels.push_back({std::string(ctx->ditherPatternName(kind)), "",
+                                compiled.value.raster, "", ""});
+    }
+    return scene;
+}
+
+Scene sceneTileableTexture(const Options& options) {
+    (void)options;
+    Scene scene;
+    scene.id = "texture";
+    scene.title = "External tiles and tileable textures";
+    scene.blurb = "A tile handed to the engine from outside. Imported as a threshold matrix it "
+                  "behaves as a dither screen; imported with its colours it is a tileable texture "
+                  "that fills a region directly, with its own scale and rotation.";
+
+    auto ctx = LSContext::create();
+    const uint32_t size = 32;
+
+    // A small woven tile, the kind an artist would paint by hand.
+    RasterBuffer tile = makeRaster(8, 8);
+    const Color warp {196, 132, 68, 255};
+    const Color weft {132, 84, 44, 255};
+    const Color knot {236, 200, 140, 255};
+    for (int32_t y = 0; y < 8; ++y) {
+        for (int32_t x = 0; x < 8; ++x) {
+            Color value = ((x / 2 + y / 2) % 2) == 0 ? warp : weft;
+            if (x % 4 == 0 && y % 4 == 0) {
+                value = knot;
+            }
+            writePixel(tile, x, y, value);
+        }
+    }
+
+    struct Variant { const char* name; PatternImportMode mode; Vec2f scale; float angle; };
+    const Variant variants[] = {
+        {"imported as texture", PatternImportMode::Colors,    {1.f, 1.f}, 0.f},
+        {"texture, 2x scale",   PatternImportMode::Colors,    {2.f, 2.f}, 0.f},
+        {"texture, rotated 30", PatternImportMode::Colors,    {1.f, 1.f}, 30.f},
+        {"imported as screen",  PatternImportMode::Threshold, {1.f, 1.f}, 0.f},
+    };
+
+    for (const Variant& variant : variants) {
+        Stage stage = makeStage(*ctx, size, "texture");
+        const GeometryId shape = ctx->createEllipse(stage.doc, {{16.f, 16.f}, 13.f, 11.f}).value;
+        const RegionId region = ctx->createRegionFromGeometry(shape).value;
+        const PatternId pattern =
+            ctx->createPatternFromRaster(stage.doc, tile, variant.mode, "weave").value;
+
+        if (variant.mode == PatternImportMode::Colors) {
+            FillTexturePatternOp fill;
+            fill.targetRegion = region;
+            fill.pattern = pattern;
+            fill.scale = variant.scale;
+            fill.angle = variant.angle;
+            ctx->addOperation(stage.layer, fill);
+        } else {
+            // The same tile as a threshold screen: luminance becomes the rank.
+            FillDitherOp dither;
+            dither.targetRegion = region;
+            dither.ramp = ctx->createRamp(stage.doc,
+                {"tone", {{0.f, {60, 38, 20, 255}}, {1.f, {242, 214, 168, 255}}}, true}).value;
+            dither.pattern = pattern;
+            dither.density = 0.5f;
+            ctx->addOperation(stage.layer, dither);
+        }
+
+        GenerateOuterOutlineOp outline;
+        outline.targetRegion = region;
+        outline.fallbackColor = {28, 18, 10, 255};
+        ctx->addOperation(stage.layer, outline);
+
+        auto compiled = ctx->compileSprite(stage.sprite, profileFor(size));
+        scene.panels.push_back({variant.name, "", compiled.value.raster, "", ""});
+    }
+    return scene;
+}
+
+Scene sceneAnchorModes(const Options& options) {
+    (void)options;
+    Scene scene;
+    scene.id = "anchors";
+    scene.title = "Local, global and fixed anchoring";
+    scene.blurb = "A horizontal line screen on a square, shown still, moved, and turned a quarter "
+                  "turn. Local rides the object completely. Global travels with it but stays "
+                  "rotation locked. Fixed belongs to the canvas and never moves at all.";
+
+    auto ctx = LSContext::create();
+    const uint32_t size = 32;
+
+    struct Variant { const char* name; PatternAnchor anchor; };
+    const Variant variants[] = {
+        {"local", PatternAnchor::Local},
+        {"global", PatternAnchor::Global},
+        {"fixed", PatternAnchor::Fixed},
+    };
+    struct Motion { const char* name; Vec2f origin; float rotate; };
+    const Motion motions[] = {
+        {"still", {8.f, 8.f}, 0.f},
+        {"moved", {15.f, 13.f}, 0.f},
+        {"turned", {8.f, 8.f}, 90.f},
+    };
+
+    for (const Variant& variant : variants) {
+        for (const Motion& motion : motions) {
+            Stage stage = makeStage(*ctx, size, "anchor");
+            const GeometryId shape =
+                ctx->createRect(stage.doc, {motion.origin, 12.f, 12.f, 0.f}).value;
+            const RegionId region = ctx->createRegionFromGeometry(shape).value;
+
+            FillDitherOp dither;
+            dither.targetRegion = region;
+            dither.ramp = ctx->createRamp(stage.doc,
+                {"two", {{0.f, {30, 34, 54, 255}}, {1.f, {232, 236, 250, 255}}}, true}).value;
+            dither.pattern = ctx->createDitherPattern(stage.doc,
+                                                      DitherPatternKind::HorizontalLines).value;
+            dither.density = 0.5f;
+            dither.anchor = variant.anchor;
+            ctx->addOperation(stage.layer, dither);
+
+            if (motion.rotate != 0.f) {
+                RotateOp rotate;
+                rotate.targetLayer = stage.layer;
+                rotate.angleDegrees = motion.rotate;
+                rotate.pivotFallback = { motion.origin.x + 6.f, motion.origin.y + 6.f };
+                ctx->addOperation(stage.layer, rotate);
+            }
+
+            auto compiled = ctx->compileSprite(stage.sprite, profileFor(size));
+            scene.panels.push_back({std::string(variant.name) + ", " + motion.name, "",
+                                    compiled.value.raster, "", ""});
+        }
+    }
+
+    // Read the orientation back out of the pixels rather than asserting it in
+    // prose: banded by row means the screen is still horizontal.
+    auto bandedByRow = [](const RasterBuffer& raster, Vec2i origin, int32_t span) {
+        for (int32_t y = 0; y < span; ++y) {
+            const Color first = readPixel(raster, origin.x, origin.y + y);
+            for (int32_t x = 1; x < span; ++x) {
+                if (readPixel(raster, origin.x + x, origin.y + y) != first) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    const bool localTurns = !bandedByRow(scene.panels[2].raster, {8, 8}, 12);
+    const bool globalLocked = bandedByRow(scene.panels[5].raster, {8, 8}, 12);
+    const bool fixedLocked = bandedByRow(scene.panels[8].raster, {8, 8}, 12);
+    scene.verdict = (localTurns && globalLocked && fixedLocked)
+        ? "under the quarter turn: local rotated with the object, global and fixed stayed level"
+        : "MISMATCH: local turned = " + std::string(localTurns ? "yes" : "no") +
+          ", global locked = " + (globalLocked ? "yes" : "no") +
+          ", fixed locked = " + (fixedLocked ? "yes" : "no");
+    return scene;
+}
+
 // --- gallery ---------------------------------------------------------------
 
 std::string escapeHtml(const std::string& text) {
@@ -784,6 +1036,10 @@ int main(int argc, char** argv) {
     scenes.push_back(sceneAuthoredPixels(options));
     scenes.push_back(sceneRotation(options));
     scenes.push_back(sceneDitherSpaces(options));
+    scenes.push_back(sceneDitheredGradients(options));
+    scenes.push_back(scenePatternLibrary(options));
+    scenes.push_back(sceneTileableTexture(options));
+    scenes.push_back(sceneAnchorModes(options));
     scenes.push_back(scenePalette(options));
     scenes.push_back(sceneOutlines(options));
     scenes.push_back(sceneBlendModes(options));

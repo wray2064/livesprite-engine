@@ -1770,8 +1770,9 @@ Result<PatternId> storePattern(LSContext::Impl& impl, DocumentId doc, PatternTil
     if (document == nullptr) {
         return Result<PatternId>::err(LSError::InvalidId);
     }
-    if (desc.tileWidth == 0 || desc.tileHeight == 0 ||
-        desc.mask.size() != static_cast<size_t>(desc.tileWidth) * desc.tileHeight) {
+    const size_t cells = static_cast<size_t>(desc.tileWidth) * desc.tileHeight;
+    if (desc.tileWidth == 0 || desc.tileHeight == 0 || desc.mask.size() != cells ||
+        (!desc.colors.empty() && desc.colors.size() != cells)) {
         return Result<PatternId>::err(LSError::InvalidParameter);
     }
     const PatternId id = impl.mint<PatternId>();
@@ -1808,14 +1809,295 @@ VoidResult LSContext::updatePattern(PatternId id, const PatternTileDesc& desc) {
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
-    if (desc.tileWidth == 0 || desc.tileHeight == 0 ||
-        desc.mask.size() != static_cast<size_t>(desc.tileWidth) * desc.tileHeight) {
+    const size_t cells = static_cast<size_t>(desc.tileWidth) * desc.tileHeight;
+    if (desc.tileWidth == 0 || desc.tileHeight == 0 || desc.mask.size() != cells ||
+        (!desc.colors.empty() && desc.colors.size() != cells)) {
         return VoidResult::err(LSError::InvalidParameter);
     }
     data->desc = desc;
     ++impl_->resourceRevision;
     impl_->markDirtyInternal(id.value);
     return VoidResult::success();
+}
+
+namespace {
+
+// Turn a per-cell priority into a threshold permutation: the lowest priority
+// gets rank 0 and so fills first. Ties break on cell index, so the result is
+// identical on every platform and every run.
+std::vector<uint8_t> rankByPriority(const std::vector<float>& priority) {
+    std::vector<uint32_t> order(priority.size());
+    for (uint32_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&priority](uint32_t a, uint32_t b) {
+        if (priority[a] != priority[b]) {
+            return priority[a] < priority[b];
+        }
+        return a < b;
+    });
+
+    std::vector<uint8_t> mask(priority.size(), 0);
+    for (uint32_t rank = 0; rank < order.size(); ++rank) {
+        mask[order[rank]] = static_cast<uint8_t>(rank);
+    }
+    return mask;
+}
+
+// Bit-reversal ordering spreads bands as far apart as possible, so a line
+// screen adds its next line in the widest remaining gap rather than beside the
+// one before it.
+uint32_t spreadOrder(uint32_t index, uint32_t count) {
+    uint32_t bits = 0;
+    while ((1u << bits) < count) {
+        ++bits;
+    }
+    uint32_t reversed = 0;
+    for (uint32_t bit = 0; bit < bits; ++bit) {
+        reversed = (reversed << 1) | ((index >> bit) & 1u);
+    }
+    return reversed % std::max(1u, count);
+}
+
+std::vector<uint8_t> bayerMatrix(uint32_t size) {
+    std::vector<uint32_t> matrix { 0 };
+    uint32_t current = 1;
+    while (current < size) {
+        const uint32_t next = current * 2;
+        std::vector<uint32_t> grown(static_cast<size_t>(next) * next, 0);
+        for (uint32_t y = 0; y < current; ++y) {
+            for (uint32_t x = 0; x < current; ++x) {
+                const uint32_t base = matrix[static_cast<size_t>(y) * current + x] * 4;
+                grown[static_cast<size_t>(y) * next + x]                     = base + 0;
+                grown[static_cast<size_t>(y) * next + x + current]           = base + 2;
+                grown[static_cast<size_t>(y + current) * next + x]           = base + 3;
+                grown[static_cast<size_t>(y + current) * next + x + current] = base + 1;
+            }
+        }
+        matrix = std::move(grown);
+        current = next;
+    }
+    std::vector<uint8_t> mask;
+    mask.reserve(matrix.size());
+    for (uint32_t value : matrix) {
+        mask.push_back(static_cast<uint8_t>(value));
+    }
+    return mask;
+}
+
+float distanceTo(float x, float y, float cx, float cy) {
+    const float dx = x - cx;
+    const float dy = y - cy;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+} // namespace
+
+std::string_view LSContext::ditherPatternName(DitherPatternKind kind) const {
+    switch (kind) {
+        case DitherPatternKind::Bayer2:          return "bayer2";
+        case DitherPatternKind::Bayer4:          return "bayer4";
+        case DitherPatternKind::Bayer8:          return "bayer8";
+        case DitherPatternKind::Checker:         return "checker";
+        case DitherPatternKind::HorizontalLines: return "horizontal";
+        case DitherPatternKind::VerticalLines:   return "vertical";
+        case DitherPatternKind::DiagonalLines:   return "diagonal";
+        case DitherPatternKind::CrossHatch:      return "crosshatch";
+        case DitherPatternKind::Dots:            return "dots";
+        case DitherPatternKind::ClusteredDot:    return "clustered";
+        case DitherPatternKind::Noise:           return "noise";
+        case DitherPatternKind::Grid:            return "grid";
+    }
+    return "unknown";
+}
+
+std::vector<DitherPatternKind> LSContext::ditherPatternKinds() const {
+    return {
+        DitherPatternKind::Bayer2, DitherPatternKind::Bayer4, DitherPatternKind::Bayer8,
+        DitherPatternKind::Checker, DitherPatternKind::HorizontalLines,
+        DitherPatternKind::VerticalLines, DitherPatternKind::DiagonalLines,
+        DitherPatternKind::CrossHatch, DitherPatternKind::Dots,
+        DitherPatternKind::ClusteredDot, DitherPatternKind::Noise, DitherPatternKind::Grid
+    };
+}
+
+Result<PatternId> LSContext::createDitherPattern(DocumentId doc, DitherPatternKind kind,
+                                                 uint32_t scale, uint32_t seed) {
+    if (scale == 0) {
+        return Result<PatternId>::err(LSError::InvalidParameter);
+    }
+
+    PatternTileDesc desc;
+    desc.name = std::string(ditherPatternName(kind));
+
+    // A rank is stored per cell in a uint8_t, so a tile holds at most 256 cells.
+    auto tooLarge = [](uint32_t w, uint32_t h) {
+        return static_cast<size_t>(w) * h > 256;
+    };
+
+    switch (kind) {
+        case DitherPatternKind::Bayer2:
+        case DitherPatternKind::Bayer4:
+        case DitherPatternKind::Bayer8: {
+            const uint32_t base = kind == DitherPatternKind::Bayer2 ? 2u
+                                : kind == DitherPatternKind::Bayer4 ? 4u : 8u;
+            const std::vector<uint8_t> matrix = bayerMatrix(base);
+            desc.tileWidth = base * scale;
+            desc.tileHeight = base * scale;
+            if (tooLarge(desc.tileWidth, desc.tileHeight)) {
+                return Result<PatternId>::err(LSError::InvalidParameter);
+            }
+            desc.levels = base * base;
+            desc.mask.resize(static_cast<size_t>(desc.tileWidth) * desc.tileHeight);
+            for (uint32_t y = 0; y < desc.tileHeight; ++y) {
+                for (uint32_t x = 0; x < desc.tileWidth; ++x) {
+                    desc.mask[static_cast<size_t>(y) * desc.tileWidth + x] =
+                        matrix[static_cast<size_t>(y / scale) * base + (x / scale)];
+                }
+            }
+            break;
+        }
+        case DitherPatternKind::Checker: {
+            desc.tileWidth = 2 * scale;
+            desc.tileHeight = 2 * scale;
+            desc.levels = 2;
+            desc.mask.resize(static_cast<size_t>(desc.tileWidth) * desc.tileHeight);
+            for (uint32_t y = 0; y < desc.tileHeight; ++y) {
+                for (uint32_t x = 0; x < desc.tileWidth; ++x) {
+                    desc.mask[static_cast<size_t>(y) * desc.tileWidth + x] =
+                        static_cast<uint8_t>(((x / scale) + (y / scale)) % 2);
+                }
+            }
+            break;
+        }
+        case DitherPatternKind::HorizontalLines:
+        case DitherPatternKind::VerticalLines:
+        case DitherPatternKind::DiagonalLines:
+        case DitherPatternKind::CrossHatch: {
+            const uint32_t bands = 4;
+            desc.tileWidth = bands * scale;
+            desc.tileHeight = bands * scale;
+            desc.levels = bands;
+            desc.mask.resize(static_cast<size_t>(desc.tileWidth) * desc.tileHeight);
+            for (uint32_t y = 0; y < desc.tileHeight; ++y) {
+                for (uint32_t x = 0; x < desc.tileWidth; ++x) {
+                    const uint32_t row = spreadOrder((y / scale) % bands, bands);
+                    const uint32_t col = spreadOrder((x / scale) % bands, bands);
+                    const uint32_t diagonal = spreadOrder(((x + y) / scale) % bands, bands);
+                    uint32_t rank = row;
+                    if (kind == DitherPatternKind::VerticalLines)      { rank = col; }
+                    else if (kind == DitherPatternKind::DiagonalLines) { rank = diagonal; }
+                    else if (kind == DitherPatternKind::CrossHatch)    { rank = std::min(row, col); }
+                    desc.mask[static_cast<size_t>(y) * desc.tileWidth + x] =
+                        static_cast<uint8_t>(rank);
+                }
+            }
+            break;
+        }
+        case DitherPatternKind::Dots:
+        case DitherPatternKind::ClusteredDot:
+        case DitherPatternKind::Grid: {
+            const uint32_t base = kind == DitherPatternKind::ClusteredDot ? 8u : 4u;
+            desc.tileWidth = base * scale;
+            desc.tileHeight = base * scale;
+            if (tooLarge(desc.tileWidth, desc.tileHeight)) {
+                return Result<PatternId>::err(LSError::InvalidParameter);
+            }
+            desc.levels = desc.tileWidth * desc.tileHeight;
+
+            const float w = static_cast<float>(desc.tileWidth);
+            const float h = static_cast<float>(desc.tileHeight);
+            std::vector<float> priority(static_cast<size_t>(desc.tileWidth) * desc.tileHeight);
+            for (uint32_t y = 0; y < desc.tileHeight; ++y) {
+                for (uint32_t x = 0; x < desc.tileWidth; ++x) {
+                    const float px = static_cast<float>(x) + 0.5f;
+                    const float py = static_cast<float>(y) + 0.5f;
+                    float value = 0.f;
+                    if (kind == DitherPatternKind::Dots) {
+                        value = distanceTo(px, py, w * 0.5f, h * 0.5f);
+                    } else if (kind == DitherPatternKind::ClusteredDot) {
+                        // Two dot centres on the diagonal: a 45 degree screen.
+                        value = std::min(distanceTo(px, py, w * 0.25f, h * 0.25f),
+                                         distanceTo(px, py, w * 0.75f, h * 0.75f));
+                    } else {
+                        // Grid: cells nearest a tile edge fill first, so the
+                        // pattern reads as crossing lines rather than as dots.
+                        value = std::min(std::min(px, w - px), std::min(py, h - py));
+                    }
+                    priority[static_cast<size_t>(y) * desc.tileWidth + x] = value;
+                }
+            }
+            desc.mask = rankByPriority(priority);
+            break;
+        }
+        case DitherPatternKind::Noise: {
+            const uint32_t base = 8;
+            desc.tileWidth = base * scale;
+            desc.tileHeight = base * scale;
+            if (tooLarge(desc.tileWidth, desc.tileHeight)) {
+                return Result<PatternId>::err(LSError::InvalidParameter);
+            }
+            desc.levels = desc.tileWidth * desc.tileHeight;
+            std::vector<float> priority(static_cast<size_t>(desc.tileWidth) * desc.tileHeight);
+            for (uint32_t y = 0; y < desc.tileHeight; ++y) {
+                for (uint32_t x = 0; x < desc.tileWidth; ++x) {
+                    uint32_t hash = seed ^ 0x9e3779b9u;
+                    hash ^= x + 0x85ebca6bu + (hash << 6) + (hash >> 2);
+                    hash ^= y + 0xc2b2ae35u + (hash << 6) + (hash >> 2);
+                    hash ^= hash >> 16; hash *= 0x7feb352du;
+                    hash ^= hash >> 15; hash *= 0x846ca68bu;
+                    hash ^= hash >> 16;
+                    priority[static_cast<size_t>(y) * desc.tileWidth + x] =
+                        static_cast<float>(hash % 1000000u);
+                }
+            }
+            desc.mask = rankByPriority(priority);
+            break;
+        }
+    }
+
+    return storePattern(*impl_, doc, std::move(desc));
+}
+
+Result<PatternId> LSContext::createPatternFromRaster(DocumentId doc, const RasterBuffer& raster,
+                                                     PatternImportMode mode,
+                                                     std::string_view name) {
+    if (raster.empty() || raster.width == 0 || raster.height == 0) {
+        return Result<PatternId>::err(LSError::InvalidParameter);
+    }
+    if (static_cast<size_t>(raster.width) * raster.height > 65536) {
+        return Result<PatternId>::err(LSError::OutOfBounds);
+    }
+
+    PatternTileDesc desc;
+    desc.name = name.empty() ? std::string("imported") : std::string(name);
+    desc.tileWidth = raster.width;
+    desc.tileHeight = raster.height;
+    desc.levels = 256;
+    desc.mask.resize(static_cast<size_t>(raster.width) * raster.height);
+    if (mode == PatternImportMode::Colors) {
+        desc.colors.resize(desc.mask.size());
+    }
+
+    for (uint32_t y = 0; y < raster.height; ++y) {
+        const uint8_t* row = raster.row(y);
+        for (uint32_t x = 0; x < raster.width; ++x) {
+            const uint8_t* px = row + x * 4;
+            const Color color { px[0], px[1], px[2], px[3] };
+            // Luminance becomes the threshold rank, so an imported greyscale
+            // texture works directly as a dither matrix.
+            const float luminance = 0.299f * static_cast<float>(color.r) +
+                                    0.587f * static_cast<float>(color.g) +
+                                    0.114f * static_cast<float>(color.b);
+            const size_t index = static_cast<size_t>(y) * raster.width + x;
+            desc.mask[index] = static_cast<uint8_t>(std::min(255.f, luminance));
+            if (mode == PatternImportMode::Colors) {
+                desc.colors[index] = color;
+            }
+        }
+    }
+
+    return storePattern(*impl_, doc, std::move(desc));
 }
 
 Result<PatternId> LSContext::createOrderedDitherPattern(DocumentId doc, uint32_t matrixSize) {

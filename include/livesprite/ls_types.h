@@ -193,6 +193,47 @@ inline bool operator!=(Color a, Color b) { return !(a == b); }
 // Enumerations shared across the API
 // ---------------------------------------------------------------------------
 
+// How a pattern is pinned while its object moves. This is about the pattern
+// lattice, not about where the shape is:
+//   Local  - the pattern rides the object: it translates AND rotates with it,
+//            so a dithered blade keeps its texture through a swing.
+//   Global - the pattern translates with the object but stays rotation locked
+//            to the canvas axes, so hatching keeps pointing the same way.
+//   Fixed  - the pattern is nailed to the canvas: parent motion never moves it,
+//            which is what a background texture or a screen-door effect wants.
+enum class PatternAnchor : uint8_t {
+    Local,
+    Global,
+    Fixed,
+};
+
+// What drives the value a dither resolves against. Constant is a flat density;
+// the others make the value vary across the fill, which is what produces a
+// dithered gradient.
+enum class DitherModulation : uint8_t {
+    Constant,
+    Linear,
+    Radial,
+    Angular,
+};
+
+// The prebaked dither matrices. Every one of these is a full threshold ranking,
+// not a 1-bit stamp, so each works at any density and inside a gradient.
+enum class DitherPatternKind : uint8_t {
+    Bayer2,
+    Bayer4,
+    Bayer8,
+    Checker,
+    HorizontalLines,
+    VerticalLines,
+    DiagonalLines,
+    CrossHatch,
+    Dots,
+    ClusteredDot,
+    Noise,
+    Grid,
+};
+
 enum class CoordinateSpace : uint8_t {
     Object,   // relative to the geometry local origin (stable under motion)
     Sprite,   // relative to the sprite bounding box
@@ -296,6 +337,20 @@ struct RasterBuffer {
     const uint8_t* row(uint32_t y) const { return pixels.data() + y * stride; }
     uint8_t*       row(uint32_t y)       { return pixels.data() + y * stride; }
 };
+
+// Build an empty (fully transparent) raster. Apps use this to hand the engine
+// pixels: an imported texture tile, a traced source image, a mask.
+inline RasterBuffer makeRaster(uint32_t width, uint32_t height) {
+    RasterBuffer raster;
+    if (width == 0 || height == 0) {
+        return raster;
+    }
+    raster.width = width;
+    raster.height = height;
+    raster.stride = width * 4;
+    raster.pixels.assign(static_cast<size_t>(raster.stride) * height, 0);
+    return raster;
+}
 
 // Pixel access on a raster buffer. Bounds-checked: out-of-range writes are
 // dropped and out-of-range reads return transparent. Plugin resolvers use these

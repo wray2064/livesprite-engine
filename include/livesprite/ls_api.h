@@ -61,17 +61,30 @@ struct RampDesc {
     bool                    interpolate = true;
 };
 
+// A pattern tile is a threshold matrix: mask[i] is the rank of that cell, and
+// levels is how many ranks exist. A cell wins when the value being dithered
+// exceeds (rank + 0.5) / levels, so one tile serves every density and every
+// step of a gradient.
+//
+// A tile may also carry colours. When `colors` is populated it is a tileable
+// texture: a texture fill paints those colours directly instead of resolving
+// palette roles.
 struct PatternTileDesc {
-    std::string         name;
-    uint32_t            tileWidth  = 4;
-    uint32_t            tileHeight = 4;
-    std::vector<uint8_t> mask;      // size = tileWidth * tileHeight
-                                    // ordered dither: threshold rank per cell
-                                    // binary patterns: 0 or 1
-    uint32_t            levels = 2; // number of distinct threshold levels
-    Vec2f               phase;
-    float               density = 1.f;
-    CoordinateSpace     coordinateSpace = CoordinateSpace::Object;
+    std::string          name;
+    uint32_t             tileWidth  = 4;
+    uint32_t             tileHeight = 4;
+    std::vector<uint8_t> mask;      // size = tileWidth * tileHeight, threshold rank per cell
+    std::vector<Color>   colors;    // empty, or the same size: a colour per cell
+    uint32_t             levels = 2;
+    Vec2f                phase;
+    float                density = 1.f;
+    CoordinateSpace      coordinateSpace = CoordinateSpace::Object;
+};
+
+// How an imported raster becomes a pattern.
+enum class PatternImportMode : uint8_t {
+    Threshold,   // luminance becomes the threshold rank: a dither matrix
+    Colors,      // pixels are kept as a tileable colour texture
 };
 
 struct SocketDesc {
@@ -305,6 +318,20 @@ public:
     Result<PatternId>   createPattern(DocumentId doc, const PatternTileDesc& desc);
     VoidResult          deletePattern(PatternId id);
     VoidResult          updatePattern(PatternId id, const PatternTileDesc& desc);
+
+    // The prebaked library. Every kind is a full threshold ranking, so it works
+    // at any density and inside a gradient. `scale` enlarges the tile (thicker
+    // lines, bigger dots); `seed` only matters for Noise.
+    Result<PatternId>   createDitherPattern(DocumentId doc, DitherPatternKind kind,
+                                            uint32_t scale = 1, uint32_t seed = 1);
+    std::vector<DitherPatternKind> ditherPatternKinds() const;
+    std::string_view    ditherPatternName(DitherPatternKind kind) const;
+
+    // External patterns: hand the engine a tile of your own, or import one from
+    // a raster (a scanned texture, a painted tile, an exported sprite).
+    Result<PatternId>   createPatternFromRaster(DocumentId doc, const RasterBuffer& raster,
+                                                PatternImportMode mode = PatternImportMode::Threshold,
+                                                std::string_view name = {});
 
     Result<PatternId>   createOrderedDitherPattern(DocumentId doc, uint32_t matrixSize);  // 2,4,8
     Result<PatternId>   createCheckerDitherPattern(DocumentId doc, uint32_t size);
