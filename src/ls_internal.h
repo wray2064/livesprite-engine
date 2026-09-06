@@ -30,6 +30,9 @@ struct DocumentData {
 
 struct SpriteData {
     DocumentId              document;
+    Mat3f                   transform;      // the sprite own placement
+    AttachmentDesc          attachment;     // valid only while attached
+    bool                    attached = false;
     std::vector<LayerId>    layers;         // compositing order, bottom first
     std::vector<GroupId>    groups;
     std::vector<SocketId>   sockets;
@@ -101,8 +104,9 @@ struct PatternData {
 };
 
 struct PivotData {
-    SpriteId sprite;
-    Vec2f    position;
+    SpriteId    sprite;
+    Vec2f       position;
+    std::string name;
 };
 
 struct SocketData {
@@ -234,6 +238,13 @@ struct LSContext::Impl {
     void registerOperationDependencies(OperationId id);
     void markDirtyInternal(uint64_t entityId);
     void invalidateCacheFor(uint64_t entityId);
+
+    // --- attachment chain -------------------------------------------------
+    // The frame a sprite ends up in: its own transform with every attachment
+    // above it folded in.
+    Result<Mat3f> worldTransformOf(SpriteId sprite) const;
+    // The chain part alone, without the sprite own transform.
+    Result<Mat3f> placementOf(SpriteId sprite) const;
 
     // --- palette resolution ----------------------------------------------
     PaletteId effectivePalette(SpriteId sprite) const;

@@ -87,10 +87,48 @@ enum class PatternImportMode : uint8_t {
     Colors,      // pixels are kept as a tileable colour texture
 };
 
+// A pivot is a named point in sprite space: where rotation, scale, squash and
+// stretch originate, and the point a child presents when it attaches.
+struct PivotDesc {
+    std::string     name;           // app-side label; engine ignores semantics
+    Vec2f           position;
+};
+
+// Where a pivot may be placed automatically. Content placements use the
+// compiled bounds of the sprite, so they follow whatever the sprite draws.
+enum class PivotPlacement : uint8_t {
+    ContentCenter,
+    ContentTop,
+    ContentBottom,
+    ContentTopLeft,
+    CanvasCenter,
+};
+
+// A socket is a named frame on a sprite: position, orientation and scale. It is
+// where another sprite pivot connects. The engine owns the attachment maths; an
+// app decides whether a socket is a hand, a weapon grip or a backpack mount.
 struct SocketDesc {
     std::string     name;           // app-side label; engine ignores semantics
     Vec2f           position;
     float           angle = 0.f;
+    Vec2f           scale = {1.f, 1.f};
+};
+
+// One sprite hanging off another sprite socket.
+struct AttachmentDesc {
+    SocketId        socket;         // the parent socket to hang from
+    PivotId         childPivot;     // the child pivot that lands on it
+    Mat3f           localOffset;    // extra local transform at the joint
+    bool            behindParent = false;   // composite under the parent instead of over it
+};
+
+struct AttachmentInfo {
+    SpriteId        child;
+    SpriteId        parent;
+    SocketId        socket;
+    PivotId         childPivot;
+    Mat3f           localOffset;
+    bool            behindParent = false;
 };
 
 struct BoundaryDesc {
@@ -367,19 +405,59 @@ public:
     // SECTION 12: Spatial Anchors (Pivot, Socket, Boundary)
     // =======================================================================
 
+    // --- Pivots ------------------------------------------------------------
     Result<PivotId>     createPivot(SpriteId sprite, Vec2f position);
+    Result<PivotId>     createPivot(SpriteId sprite, const PivotDesc& desc);
     VoidResult          deletePivot(PivotId id);
     VoidResult          setPivot(PivotId id, Vec2f position);
     Result<Vec2f>       getPivot(PivotId id) const;
     VoidResult          movePivot(PivotId id, Vec2f delta);
     VoidResult          setSpritePivot(SpriteId sprite, PivotId pivot);
+    Result<PivotId>     findPivot(SpriteId sprite, std::string_view name) const;
+    Result<std::string> getPivotName(PivotId id) const;
+    // Place a pivot from the sprite compiled bounds, so it follows the artwork.
+    VoidResult          placePivot(PivotId id, PivotPlacement placement,
+                                   const CompileProfile& profile = {});
+    // Where the pivot ends up once the sprite own transform and any attachment
+    // chain above it are resolved.
+    Result<Vec2f>       getPivotWorldPosition(PivotId id) const;
 
+    // --- Sprite placement --------------------------------------------------
+    // A sprite carries its own transform. compileSprite resolves it, so a
+    // sprite placed or turned here compiles where it was put.
+    VoidResult          setSpriteTransform(SpriteId sprite, const Mat3f& transform);
+    Result<Mat3f>       getSpriteTransform(SpriteId sprite) const;
+    // The same transform with every attachment above it folded in.
+    Result<Mat3f>       getSpriteWorldTransform(SpriteId sprite) const;
+
+    // --- Sockets -----------------------------------------------------------
     Result<SocketId>    addSocket(SpriteId sprite, const SocketDesc& desc);
     VoidResult          removeSocket(SocketId id);
     VoidResult          moveSocket(SocketId id, Vec2f position);
     VoidResult          rotateSocket(SocketId id, float angleDeg);
+    VoidResult          setSocketScale(SocketId id, Vec2f scale);
+    Result<SocketDesc>  getSocket(SocketId id) const;
+    Result<SocketId>    findSocket(SpriteId sprite, std::string_view name) const;
+    // The socket frame in sprite-local space.
     Result<Mat3f>       getSocketTransform(SocketId id) const;
+    // The socket frame after the owning sprite transform and attachment chain.
+    Result<Mat3f>       getSocketWorldTransform(SocketId id) const;
+    Result<Vec2f>       getSocketWorldPosition(SocketId id) const;
+    // The placement that lands childPivot on this socket, without any chain.
     Result<Mat3f>       resolveSocketAttachment(SocketId socket, PivotId childPivot) const;
+
+    // --- Attachments -------------------------------------------------------
+    // A sprite hangs off at most one socket. Attaching rejects a cycle rather
+    // than building one.
+    VoidResult          attachSprite(SpriteId child, const AttachmentDesc& desc);
+    VoidResult          detachSprite(SpriteId child);
+    Result<AttachmentInfo> getAttachment(SpriteId child) const;
+    Result<std::vector<SpriteId>> getAttachedSprites(SocketId socket) const;
+    // Every sprite in the assembly under root, in compositing order.
+    Result<std::vector<SpriteId>> assemblyOrder(SpriteId root) const;
+    // Compile the whole assembly: each sprite compiled from its own operations,
+    // then placed by the attachment chain.
+    Result<CompileResult> compileAssembly(SpriteId root, const CompileProfile& profile);
 
     Result<BoundaryId>  createBoundary(SpriteId sprite, const BoundaryDesc& desc);
     VoidResult          deleteBoundary(BoundaryId id);

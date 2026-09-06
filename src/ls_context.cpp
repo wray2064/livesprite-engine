@@ -273,6 +273,59 @@ SpriteId LSContext::Impl::spriteOfLayer(LayerId id) const {
     return layer ? layer->sprite : SpriteId::null();
 }
 
+Result<Mat3f> LSContext::Impl::worldTransformOf(SpriteId sprite) const {
+    const SpriteData* data = findSprite(sprite);
+    if (data == nullptr) {
+        return Result<Mat3f>::err(LSError::InvalidId);
+    }
+    if (!data->attached) {
+        return Result<Mat3f>::ok(data->transform);
+    }
+
+    const SocketData* socket = findSocket(data->attachment.socket);
+    const PivotData* pivot = findPivot(data->attachment.childPivot);
+    if (socket == nullptr || pivot == nullptr) {
+        // A broken attachment leaves the sprite standing on its own transform
+        // rather than vanishing.
+        return Result<Mat3f>::ok(data->transform);
+    }
+
+    auto parentWorld = worldTransformOf(socket->sprite);
+    if (parentWorld.fail()) {
+        return parentWorld;
+    }
+
+    const Mat3f socketLocal = Mat3f::translation(socket->desc.position)
+                                  .mul(Mat3f::rotation(socket->desc.angle))
+                                  .mul(Mat3f::scaling(socket->desc.scale));
+    // Parent frame, then the socket, then the joint offset, then the child
+    // pivot brought to the origin, and finally the child own transform.
+    return Result<Mat3f>::ok(parentWorld.value
+                                 .mul(socketLocal)
+                                 .mul(data->attachment.localOffset)
+                                 .mul(Mat3f::translation({ -pivot->position.x,
+                                                           -pivot->position.y }))
+                                 .mul(data->transform));
+}
+
+Result<Mat3f> LSContext::Impl::placementOf(SpriteId sprite) const {
+    // The chain part only: what compileAssembly applies on top of a compile
+    // that already resolved the sprite own transform.
+    const SpriteData* data = findSprite(sprite);
+    if (data == nullptr) {
+        return Result<Mat3f>::err(LSError::InvalidId);
+    }
+    auto world = worldTransformOf(sprite);
+    if (world.fail()) {
+        return world;
+    }
+    auto ownInverse = data->transform.inverse();
+    if (ownInverse.fail()) {
+        return Result<Mat3f>::ok(world.value);
+    }
+    return Result<Mat3f>::ok(world.value.mul(ownInverse.value));
+}
+
 PaletteId LSContext::Impl::effectivePalette(SpriteId sprite) const {
     const SpriteData* data = findSprite(sprite);
     if (data == nullptr) {
@@ -2387,18 +2440,102 @@ Result<OperationId> LSContext::stretchSprite(SpriteId sprite, float factor, Boun
 // SECTION 12: Pivots, sockets, boundaries
 // ---------------------------------------------------------------------------
 
-Result<PivotId> LSContext::createPivot(SpriteId sprite, Vec2f position) {
+Result<PivotId> LSContext::createPivot(SpriteId sprite, const PivotDesc& desc) {
     SpriteData* data = impl_->findSprite(sprite);
     if (data == nullptr) {
         return Result<PivotId>::err(LSError::InvalidId);
     }
     const PivotId id = impl_->mint<PivotId>();
-    impl_->pivots.emplace(id.value, PivotData{ sprite, position });
+    impl_->pivots.emplace(id.value, PivotData{ sprite, desc.position, desc.name });
     data->pivots.push_back(id);
     if (!data->pivot.valid()) {
         data->pivot = id;
     }
     return Result<PivotId>::ok(id);
+}
+
+Result<PivotId> LSContext::createPivot(SpriteId sprite, Vec2f position) {
+    PivotDesc desc;
+    desc.position = position;
+    return createPivot(sprite, desc);
+}
+
+Result<PivotId> LSContext::findPivot(SpriteId sprite, std::string_view name) const {
+    const SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return Result<PivotId>::err(LSError::InvalidId);
+    }
+    for (PivotId id : data->pivots) {
+        const PivotData* pivot = impl_->findPivot(id);
+        if (pivot != nullptr && pivot->name == name) {
+            return Result<PivotId>::ok(id);
+        }
+    }
+    return Result<PivotId>::err(LSError::InvalidId);
+}
+
+Result<std::string> LSContext::getPivotName(PivotId id) const {
+    const PivotData* data = impl_->findPivot(id);
+    if (data == nullptr) {
+        return Result<std::string>::err(LSError::InvalidId);
+    }
+    return Result<std::string>::ok(data->name);
+}
+
+VoidResult LSContext::placePivot(PivotId id, PivotPlacement placement,
+                                 const CompileProfile& profile) {
+    PivotData* data = impl_->findPivot(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    const SpriteData* sprite = impl_->findSprite(data->sprite);
+    if (sprite == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+
+    if (placement == PivotPlacement::CanvasCenter) {
+        const DocumentData* document = impl_->findDocument(sprite->document);
+        if (document == nullptr) {
+            return VoidResult::err(LSError::InvalidId);
+        }
+        data->position = { static_cast<float>(document->canvasWidth) * 0.5f,
+                           static_cast<float>(document->canvasHeight) * 0.5f };
+        impl_->markDirtyInternal(id.value);
+        return VoidResult::success();
+    }
+
+    // Content placements need to know what the sprite actually draws.
+    auto bounds = compileBoundsOnly(data->sprite, profile);
+    if (bounds.fail()) {
+        return VoidResult::err(bounds.error);
+    }
+    const Rect2i box = bounds.value;
+    if (box.empty()) {
+        return VoidResult::err(LSError::RegionEmpty);
+    }
+
+    const float left = static_cast<float>(box.min.x);
+    const float right = static_cast<float>(box.max.x);
+    const float top = static_cast<float>(box.min.y);
+    const float bottom = static_cast<float>(box.max.y);
+    switch (placement) {
+        case PivotPlacement::ContentCenter:
+            data->position = { (left + right) * 0.5f, (top + bottom) * 0.5f };
+            break;
+        case PivotPlacement::ContentTop:
+            data->position = { (left + right) * 0.5f, top };
+            break;
+        case PivotPlacement::ContentBottom:
+            data->position = { (left + right) * 0.5f, bottom };
+            break;
+        case PivotPlacement::ContentTopLeft:
+            data->position = { left, top };
+            break;
+        case PivotPlacement::CanvasCenter:
+            break;
+    }
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
 }
 
 VoidResult LSContext::deletePivot(PivotId id) {
@@ -2506,14 +2643,112 @@ VoidResult LSContext::rotateSocket(SocketId id, float angleDeg) {
     return VoidResult::success();
 }
 
+VoidResult LSContext::setSocketScale(SocketId id, Vec2f scale) {
+    SocketData* data = impl_->findSocket(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (scale.x == 0.f || scale.y == 0.f) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    data->desc.scale = scale;
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
+
+Result<SocketDesc> LSContext::getSocket(SocketId id) const {
+    const SocketData* data = impl_->findSocket(id);
+    if (data == nullptr) {
+        return Result<SocketDesc>::err(LSError::InvalidId);
+    }
+    return Result<SocketDesc>::ok(data->desc);
+}
+
+Result<SocketId> LSContext::findSocket(SpriteId sprite, std::string_view name) const {
+    const SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return Result<SocketId>::err(LSError::InvalidId);
+    }
+    for (SocketId id : data->sockets) {
+        const SocketData* socket = impl_->findSocket(id);
+        if (socket != nullptr && socket->desc.name == name) {
+            return Result<SocketId>::ok(id);
+        }
+    }
+    return Result<SocketId>::err(LSError::InvalidId);
+}
+
 Result<Mat3f> LSContext::getSocketTransform(SocketId id) const {
     const SocketData* data = impl_->findSocket(id);
     if (data == nullptr) {
         return Result<Mat3f>::err(LSError::InvalidId);
     }
+    // Position, then orientation, then the scale the socket imposes on whatever
+    // hangs from it.
     const Mat3f transform = Mat3f::translation(data->desc.position)
-                                .mul(Mat3f::rotation(data->desc.angle));
+                                .mul(Mat3f::rotation(data->desc.angle))
+                                .mul(Mat3f::scaling(data->desc.scale));
     return Result<Mat3f>::ok(transform);
+}
+
+// --- the transform chain ---------------------------------------------------
+
+VoidResult LSContext::setSpriteTransform(SpriteId sprite, const Mat3f& transform) {
+    SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->transform = transform;
+    impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
+}
+
+Result<Mat3f> LSContext::getSpriteTransform(SpriteId sprite) const {
+    const SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return Result<Mat3f>::err(LSError::InvalidId);
+    }
+    return Result<Mat3f>::ok(data->transform);
+}
+
+Result<Mat3f> LSContext::getSpriteWorldTransform(SpriteId sprite) const {
+    return impl_->worldTransformOf(sprite);
+}
+
+Result<Mat3f> LSContext::getSocketWorldTransform(SocketId id) const {
+    const SocketData* data = impl_->findSocket(id);
+    if (data == nullptr) {
+        return Result<Mat3f>::err(LSError::InvalidId);
+    }
+    auto owner = impl_->worldTransformOf(data->sprite);
+    if (owner.fail()) {
+        return owner;
+    }
+    auto local = getSocketTransform(id);
+    if (local.fail()) {
+        return local;
+    }
+    return Result<Mat3f>::ok(owner.value.mul(local.value));
+}
+
+Result<Vec2f> LSContext::getSocketWorldPosition(SocketId id) const {
+    auto transform = getSocketWorldTransform(id);
+    if (transform.fail()) {
+        return Result<Vec2f>::err(transform.error);
+    }
+    return Result<Vec2f>::ok(transform.value.transformPoint({0.f, 0.f}));
+}
+
+Result<Vec2f> LSContext::getPivotWorldPosition(PivotId id) const {
+    const PivotData* data = impl_->findPivot(id);
+    if (data == nullptr) {
+        return Result<Vec2f>::err(LSError::InvalidId);
+    }
+    auto world = impl_->worldTransformOf(data->sprite);
+    if (world.fail()) {
+        return Result<Vec2f>::err(world.error);
+    }
+    return Result<Vec2f>::ok(world.value.transformPoint(data->position));
 }
 
 Result<Mat3f> LSContext::resolveSocketAttachment(SocketId socket, PivotId childPivot) const {
@@ -2525,10 +2760,149 @@ Result<Mat3f> LSContext::resolveSocketAttachment(SocketId socket, PivotId childP
     if (pivot == nullptr) {
         return Result<Mat3f>::err(LSError::InvalidId);
     }
-    // The child pivot lands on the socket: socket transform, then pivot offset.
+    // The child pivot lands on the socket: socket frame, then pivot offset.
     const Mat3f attach = socketTransform.value.mul(
         Mat3f::translation({ -pivot->position.x, -pivot->position.y }));
     return Result<Mat3f>::ok(attach);
+}
+
+// --- attachments -----------------------------------------------------------
+
+VoidResult LSContext::attachSprite(SpriteId child, const AttachmentDesc& desc) {
+    SpriteData* childData = impl_->findSprite(child);
+    const SocketData* socket = impl_->findSocket(desc.socket);
+    if (childData == nullptr || socket == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    const PivotData* pivot = impl_->findPivot(desc.childPivot);
+    if (pivot == nullptr || pivot->sprite != child) {
+        // The pivot presented to a socket has to belong to the child.
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    if (socket->sprite == child) {
+        return VoidResult::err(LSError::DependencyCycle);
+    }
+
+    // Walk up from the prospective parent: meeting the child means this
+    // attachment would close a loop.
+    SpriteId ancestor = socket->sprite;
+    for (int guard = 0; guard < 1024 && ancestor.valid(); ++guard) {
+        if (ancestor == child) {
+            return VoidResult::err(LSError::DependencyCycle);
+        }
+        const SpriteData* data = impl_->findSprite(ancestor);
+        if (data == nullptr || !data->attached) {
+            break;
+        }
+        const SocketData* parentSocket = impl_->findSocket(data->attachment.socket);
+        ancestor = parentSocket == nullptr ? SpriteId::null() : parentSocket->sprite;
+    }
+
+    childData->attachment = desc;
+    childData->attached = true;
+    impl_->addDependencyEdge(socket->sprite.value, child.value);
+    impl_->markDirtyInternal(child.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::detachSprite(SpriteId child) {
+    SpriteData* data = impl_->findSprite(child);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (!data->attached) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    data->attached = false;
+    data->attachment = AttachmentDesc{};
+    impl_->markDirtyInternal(child.value);
+    return VoidResult::success();
+}
+
+Result<AttachmentInfo> LSContext::getAttachment(SpriteId child) const {
+    const SpriteData* data = impl_->findSprite(child);
+    if (data == nullptr) {
+        return Result<AttachmentInfo>::err(LSError::InvalidId);
+    }
+    if (!data->attached) {
+        return Result<AttachmentInfo>::err(LSError::InvalidParameter);
+    }
+    const SocketData* socket = impl_->findSocket(data->attachment.socket);
+    if (socket == nullptr) {
+        return Result<AttachmentInfo>::err(LSError::InvalidId);
+    }
+
+    AttachmentInfo info;
+    info.child = child;
+    info.parent = socket->sprite;
+    info.socket = data->attachment.socket;
+    info.childPivot = data->attachment.childPivot;
+    info.localOffset = data->attachment.localOffset;
+    info.behindParent = data->attachment.behindParent;
+    return Result<AttachmentInfo>::ok(info);
+}
+
+Result<std::vector<SpriteId>> LSContext::getAttachedSprites(SocketId socket) const {
+    if (impl_->findSocket(socket) == nullptr) {
+        return Result<std::vector<SpriteId>>::err(LSError::InvalidId);
+    }
+    // Ordered by sprite id so the answer is stable across runs.
+    std::vector<SpriteId> attached;
+    for (const auto& [id, data] : impl_->sprites) {
+        if (data.attached && data.attachment.socket == socket) {
+            attached.push_back(SpriteId{id});
+        }
+    }
+    std::sort(attached.begin(), attached.end());
+    return Result<std::vector<SpriteId>>::ok(attached);
+}
+
+Result<std::vector<SpriteId>> LSContext::assemblyOrder(SpriteId root) const {
+    if (impl_->findSprite(root) == nullptr) {
+        return Result<std::vector<SpriteId>>::err(LSError::InvalidId);
+    }
+
+    // Depth first through each socket of each sprite, in socket order, with
+    // behind-parent children emitted before the parent.
+    std::vector<SpriteId> order;
+    std::set<uint64_t> visited;
+
+    std::function<void(SpriteId)> walk = [&](SpriteId sprite) {
+        if (!visited.insert(sprite.value).second) {
+            return;
+        }
+        const SpriteData* data = impl_->findSprite(sprite);
+        if (data == nullptr) {
+            return;
+        }
+
+        std::vector<SpriteId> behind;
+        std::vector<SpriteId> front;
+        for (SocketId socketId : data->sockets) {
+            auto children = getAttachedSprites(socketId);
+            if (children.fail()) {
+                continue;
+            }
+            for (SpriteId child : children.value) {
+                const SpriteData* childData = impl_->findSprite(child);
+                if (childData == nullptr) {
+                    continue;
+                }
+                (childData->attachment.behindParent ? behind : front).push_back(child);
+            }
+        }
+
+        for (SpriteId child : behind) {
+            walk(child);
+        }
+        order.push_back(sprite);
+        for (SpriteId child : front) {
+            walk(child);
+        }
+    };
+
+    walk(root);
+    return Result<std::vector<SpriteId>>::ok(order);
 }
 
 Result<BoundaryId> LSContext::createBoundary(SpriteId sprite, const BoundaryDesc& desc) {

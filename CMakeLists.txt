@@ -60,6 +60,10 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_dither_tests PRIVATE livesprite)
     add_test(NAME livesprite_dither COMMAND livesprite_dither_tests)
 
+    add_executable(livesprite_anchor_tests tests/anchor_tests.cpp)
+    target_link_libraries(livesprite_anchor_tests PRIVATE livesprite)
+    add_test(NAME livesprite_anchor COMMAND livesprite_anchor_tests)
+
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)
     add_test(NAME livesprite_plugin COMMAND livesprite_plugin_tests)

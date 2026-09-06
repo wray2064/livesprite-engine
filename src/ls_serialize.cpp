@@ -663,6 +663,15 @@ json::Value writeSprite(const LSContext::Impl& impl, SpriteId spriteId, const Sp
     obj["id"] = enc(spriteId);
     obj["palette"] = enc(sprite.palette);
     obj["pivot"] = enc(sprite.pivot);
+    obj["transform"] = enc(sprite.transform);
+    if (sprite.attached) {
+        json::Value attachment = json::Value::object();
+        attachment["socket"] = enc(sprite.attachment.socket);
+        attachment["childPivot"] = enc(sprite.attachment.childPivot);
+        attachment["localOffset"] = enc(sprite.attachment.localOffset);
+        attachment["behindParent"] = enc(sprite.attachment.behindParent);
+        obj["attachment"] = std::move(attachment);
+    }
 
     json::Value pivots = json::Value::array();
     for (PivotId pivotId : sprite.pivots) {
@@ -673,6 +682,7 @@ json::Value writeSprite(const LSContext::Impl& impl, SpriteId spriteId, const Sp
         json::Value pivotObj = json::Value::object();
         pivotObj["id"] = enc(pivotId);
         pivotObj["position"] = enc(data->position);
+        pivotObj["name"] = enc(data->name);
         pivots.push(std::move(pivotObj));
     }
     obj["pivots"] = std::move(pivots);
@@ -688,6 +698,7 @@ json::Value writeSprite(const LSContext::Impl& impl, SpriteId spriteId, const Sp
         socketObj["name"] = enc(data->desc.name);
         socketObj["position"] = enc(data->desc.position);
         socketObj["angle"] = enc(data->desc.angle);
+        socketObj["scale"] = enc(data->desc.scale);
         sockets.push(std::move(socketObj));
     }
     obj["sockets"] = std::move(sockets);
@@ -1180,12 +1191,21 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             SpriteData sprite;
             sprite.document = DocumentId{docId};
             std::set<std::string> consumed {
-                "id", "pivots", "sockets", "boundaries", "groups", "layers"
+                "id", "pivots", "sockets", "boundaries", "groups", "layers", "attachment"
             };
             {
                 Reader reader{&spriteObj, ctx, &consumed};
                 reader.field("palette", sprite.palette);
                 reader.field("pivot", sprite.pivot);
+                reader.field("transform", sprite.transform);
+            }
+            if (const json::Value* attachment = spriteObj.find("attachment")) {
+                Reader reader{attachment, ctx, nullptr};
+                reader.field("socket", sprite.attachment.socket);
+                reader.field("childPivot", sprite.attachment.childPivot);
+                reader.field("localOffset", sprite.attachment.localOffset);
+                reader.field("behindParent", sprite.attachment.behindParent);
+                sprite.attached = sprite.attachment.socket.valid();
             }
 
             if (const json::Value* list = spriteObj.find("pivots")) {
@@ -1198,6 +1218,9 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
                     pivot.sprite = SpriteId{spriteId};
                     if (const json::Value* position = item.find("position")) {
                         dec(*position, ctx, pivot.position);
+                    }
+                    if (const json::Value* pivotName = item.find("name")) {
+                        pivot.name = pivotName->asString();
                     }
                     impl.pivots.emplace(id, pivot);
                     sprite.pivots.push_back(PivotId{id});
@@ -1216,6 +1239,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
                     reader.field("name", socket.desc.name);
                     reader.field("position", socket.desc.position);
                     reader.field("angle", socket.desc.angle);
+                    reader.field("scale", socket.desc.scale);
                     impl.sockets.emplace(id, std::move(socket));
                     sprite.sockets.push_back(SocketId{id});
                 }

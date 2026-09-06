@@ -11,6 +11,7 @@
 
 #include <livesprite/livesprite.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -876,6 +877,120 @@ Scene sceneAnchorModes(const Options& options) {
     return scene;
 }
 
+Scene sceneAttachment(const Options& options) {
+    (void)options;
+    Scene scene;
+    scene.id = "rig";
+    scene.title = "Sockets, pivots and attachment";
+    scene.blurb = "A body, an arm hung from its shoulder socket, and a sword hung from the socket "
+                  "on the arm. Only the arm angle changes between panels: the sword follows "
+                  "because the chain resolves, not because anything was redrawn.";
+
+    auto ctx = LSContext::create();
+    const uint32_t size = 48;
+
+    const Color skin {214, 176, 140, 255};
+    const Color cloth {84, 104, 152, 255};
+    const Color steel {198, 208, 226, 255};
+    const Color ink {24, 26, 34, 255};
+
+    const float angles[] = {-40.f, 0.f, 45.f, 100.f};
+    std::vector<RasterBuffer> bodyAlone;
+
+    for (float angle : angles) {
+        const DocumentId doc = ctx->createDocument({"rig", size, size}).value;
+
+        auto solidSprite = [&](Vec2f origin, Vec2f extent, Color fill) {
+            const SpriteId sprite = ctx->createSprite(doc).value;
+            const LayerId layer = ctx->createLayer(sprite, {"body"}).value;
+            const GeometryId rect =
+                ctx->createRect(doc, {origin, extent.x, extent.y, 1.f}).value;
+            const RegionId region = ctx->createRegionFromGeometry(rect).value;
+            FillSolidOp solid;
+            solid.targetRegion = region;
+            solid.fallbackColor = fill;
+            ctx->addOperation(layer, solid);
+            GenerateOuterOutlineOp outline;
+            outline.targetRegion = region;
+            outline.fallbackColor = ink;
+            ctx->addOperation(layer, outline);
+            return sprite;
+        };
+
+        // Torso, drawn where it stands.
+        const SpriteId body = solidSprite({19.f, 18.f}, {10.f, 18.f}, cloth);
+        const SocketId shoulder = ctx->addSocket(body, {"shoulder", {28.f, 21.f}, 0.f}).value;
+
+        // Arm and sword are authored at the origin and placed by the chain.
+        const SpriteId arm = solidSprite({0.f, 0.f}, {4.f, 14.f}, skin);
+        const PivotId armRoot = ctx->createPivot(arm, PivotDesc{"root", {2.f, 1.f}}).value;
+        const SocketId grip = ctx->addSocket(arm, {"grip", {2.f, 13.f}, 0.f}).value;
+
+        const SpriteId sword = solidSprite({0.f, 0.f}, {3.f, 16.f}, steel);
+        const PivotId hilt = ctx->createPivot(sword, PivotDesc{"hilt", {1.f, 14.f}}).value;
+
+        AttachmentDesc armToBody;
+        armToBody.socket = shoulder;
+        armToBody.childPivot = armRoot;
+        ctx->attachSprite(arm, armToBody);
+
+        AttachmentDesc swordToArm;
+        swordToArm.socket = grip;
+        swordToArm.childPivot = hilt;
+        ctx->attachSprite(sword, swordToArm);
+
+        // The only thing that changes across panels.
+        ctx->setSpriteTransform(arm, Mat3f::aroundPivot(Mat3f::rotation(angle), {2.f, 1.f}));
+
+        // The body compiled on its own: proof that nothing about it changed
+        // between panels, whatever the arm happens to cover.
+        bodyAlone.push_back(ctx->compileSprite(body, profileFor(size)).value.raster);
+
+        auto compiled = ctx->compileAssembly(body, profileFor(size));
+        std::ostringstream label;
+        label << "arm at " << static_cast<int>(angle) << " degrees";
+        scene.panels.push_back({label.str(), pixels(compiled.value.raster),
+                                compiled.value.raster, "", ""});
+    }
+
+    // Check the claim: the sword tip should travel as the arm swings, while the
+    // body stays put.
+    auto centroidOf = [](const RasterBuffer& raster, Color color) {
+        double sumX = 0.0, sumY = 0.0;
+        int count = 0;
+        for (uint32_t y = 0; y < raster.height; ++y) {
+            for (uint32_t x = 0; x < raster.width; ++x) {
+                if (readPixel(raster, static_cast<int32_t>(x), static_cast<int32_t>(y)) == color) {
+                    sumX += x;
+                    sumY += y;
+                    ++count;
+                }
+            }
+        }
+        return count == 0 ? Vec2f{-1.f, -1.f}
+                          : Vec2f{ static_cast<float>(sumX / count),
+                                   static_cast<float>(sumY / count) };
+    };
+
+    const Vec2f swordFirst = centroidOf(scene.panels.front().raster, steel);
+    const Vec2f swordLast = centroidOf(scene.panels.back().raster, steel);
+    const float swordTravel = std::sqrt((swordLast.x - swordFirst.x) * (swordLast.x - swordFirst.x) +
+                                        (swordLast.y - swordFirst.y) * (swordLast.y - swordFirst.y));
+    const bool bodyUnchanged = bodyAlone.size() > 1 &&
+                               bodyAlone.front().pixels == bodyAlone.back().pixels;
+
+    std::ostringstream verdict;
+    if (swordTravel > 4.f && bodyUnchanged) {
+        verdict << "the sword travelled " << static_cast<int>(swordTravel)
+                << " px across the swing; the body compiled identically every time";
+    } else {
+        verdict << "MISMATCH: sword travel " << swordTravel
+                << ", body unchanged = " << (bodyUnchanged ? "yes" : "no");
+    }
+    scene.verdict = verdict.str();
+    return scene;
+}
+
 // --- gallery ---------------------------------------------------------------
 
 std::string escapeHtml(const std::string& text) {
@@ -1045,6 +1160,7 @@ int main(int argc, char** argv) {
     scenes.push_back(sceneBlendModes(options));
     scenes.push_back(sceneDeforms(options));
     scenes.push_back(sceneRegionMath(options));
+    scenes.push_back(sceneAttachment(options));
     scenes.push_back(sceneRoundTrip(options));
 
     if (!writePanels(options, scenes) || !writeGallery(options, scenes)) {

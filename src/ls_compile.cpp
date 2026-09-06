@@ -313,6 +313,16 @@ RasterBuffer cleanupTransformed(const RasterBuffer& raster,
     return cleaned;
 }
 
+bool isIdentityTransform(const Mat3f& matrix) {
+    static const Mat3f identity;
+    for (int i = 0; i < 9; ++i) {
+        if (std::fabs(matrix.m[i] - identity.m[i]) > 1e-5f) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool isOrthogonalTransform(const Mat3f& matrix) {
     auto nearInteger = [](float value) {
         return std::fabs(value - std::round(value)) < 1e-4f;
@@ -2347,6 +2357,16 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         }
     }
 
+    // The sprite own placement: a sprite moved or turned through
+    // setSpriteTransform compiles where it was put.
+    if (!isIdentityTransform(sprite->transform)) {
+        result.raster = transformRaster(result.raster, sprite->transform,
+                                        resolved.sampling, resolved.coverageThreshold);
+        if (debug) {
+            result.trace.push_back("resolved sprite transform");
+        }
+    }
+
     // Palette policy.
     const PaletteId palette = impl_->effectivePalette(id);
     if (palette.valid() && resolved.palette != PalettePolicy::Unconstrained) {
@@ -2428,6 +2448,82 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
 
     impl_->compileCache[key] = result;
     impl_->graph.dirty.erase(id.value);
+    return Result<CompileResult>::ok(result);
+}
+
+Result<CompileResult> LSContext::compileAssembly(SpriteId root, const CompileProfile& profile) {
+    const SpriteData* rootData = impl_->findSprite(root);
+    if (rootData == nullptr) {
+        return Result<CompileResult>::err(LSError::InvalidId);
+    }
+    const CompileProfile resolved = impl_->resolveProfileDefaults(profile, rootData->document);
+
+    auto order = assemblyOrder(root);
+    if (order.fail()) {
+        return Result<CompileResult>::err(order.error);
+    }
+
+    auto allocated = allocateRaster(resolved.outputWidth, resolved.outputHeight);
+    if (allocated.fail()) {
+        return Result<CompileResult>::err(allocated.error);
+    }
+
+    CompileResult result;
+    result.raster = std::move(allocated.value);
+    const bool debug = resolved.type == CompileProfileType::Debug;
+
+    // Everything is placed relative to the root, so an assembly compiles in the
+    // root frame no matter where the root itself sits.
+    auto rootPlacement = impl_->placementOf(root);
+    if (rootPlacement.fail()) {
+        return Result<CompileResult>::err(rootPlacement.error);
+    }
+    auto rootInverse = rootPlacement.value.inverse();
+
+    for (SpriteId spriteId : order.value) {
+        auto compiled = compileSprite(spriteId, resolved);
+        if (compiled.fail()) {
+            return Result<CompileResult>::err(compiled.error);
+        }
+
+        // Each sprite already resolved its own transform, so only the chain
+        // above it is applied here.
+        RasterBuffer placed = compiled.value.raster;
+        if (spriteId != root) {
+            auto placement = impl_->placementOf(spriteId);
+            if (placement.fail()) {
+                return Result<CompileResult>::err(placement.error);
+            }
+            const Mat3f relative = rootInverse.ok()
+                ? rootInverse.value.mul(placement.value)
+                : placement.value;
+            if (!isIdentityTransform(relative)) {
+                placed = transformRaster(placed, relative, resolved.sampling,
+                                         resolved.coverageThreshold);
+            }
+        }
+
+        for (int32_t y = 0; y < static_cast<int32_t>(result.raster.height); ++y) {
+            for (int32_t x = 0; x < static_cast<int32_t>(result.raster.width); ++x) {
+                const Color source = getRasterPixel(placed, x, y);
+                if (source.a == 0) {
+                    continue;
+                }
+                setRasterPixel(result.raster, x, y,
+                               blendPixel(getRasterPixel(result.raster, x, y), source,
+                                          BlendMode::Normal, 1.f));
+            }
+        }
+
+        if (debug) {
+            result.trace.push_back("assembled sprite " + std::to_string(spriteId.value));
+        }
+    }
+
+    result.bounds = rasterBounds(result.raster);
+    if (resolved.type == CompileProfileType::BoundsOnly) {
+        result.raster = RasterBuffer{};
+    }
     return Result<CompileResult>::ok(result);
 }
 
