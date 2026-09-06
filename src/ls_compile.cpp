@@ -500,8 +500,18 @@ RasterBuffer transformRaster(const RasterBuffer& source, const Mat3f& matrix,
 }
 
 // Forward displacement (used by deforms), followed by hole repair.
+//
+// `trackedPoints`, when given, are carried through the same displacement. That
+// is how a Global pattern origin follows a warp: the mapping happens here,
+// where the displacement function is still in scope.
 RasterBuffer displaceRaster(const RasterBuffer& source,
-                            const std::function<Vec2f(Vec2f)>& displace) {
+                            const std::function<Vec2f(Vec2f)>& displace,
+                            std::vector<Vec2f>* trackedPoints = nullptr) {
+    if (trackedPoints != nullptr) {
+        for (Vec2f& point : *trackedPoints) {
+            point = displace(point);
+        }
+    }
     auto allocated = allocateRaster(source.width, source.height);
     if (allocated.fail()) {
         return source;
@@ -1007,12 +1017,12 @@ uint32_t decodeTag(Color color) {
             static_cast<uint32_t>(color.b);
 }
 
-// `mapPoint`, when given, receives how this operation moves a point. Affine
-// operations report their matrix exactly. A free-form deform reports nothing,
-// so a Global pattern origin stays where the deform found it.
+// `trackedPoints`, when given, are moved exactly the way this operation moves
+// the content: through its matrix for an affine transform, through its
+// displacement field for a deform. Anchored pattern origins ride along in it.
 RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
                                      const RasterBuffer& source,
-                                     std::function<Vec2f(Vec2f)>* mapPoint = nullptr) {
+                                     std::vector<Vec2f>* trackedPoints = nullptr) {
     auto pivotOf = [&](PivotId pivot, Vec2f fallback) -> Vec2f {
         if (const PivotData* data = env.impl->findPivot(pivot)) {
             return data->position;
@@ -1071,8 +1081,10 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     };
 
     auto runMatrix = [&](const Mat3f& matrix, RegionId targetRegion, SamplingPolicy sampling) {
-        if (mapPoint != nullptr) {
-            *mapPoint = [matrix](Vec2f point) { return matrix.transformPoint(point); };
+        if (trackedPoints != nullptr) {
+            for (Vec2f& point : *trackedPoints) {
+                point = matrix.transformPoint(point);
+            }
         }
         const RasterBuffer input = targetRegion.valid() ? isolate(targetRegion) : source;
         RasterBuffer moved = transformRaster(input, matrix, sampling,
@@ -1184,7 +1196,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float scaleX = influence > 0.f ? 1.f + (1.f / factor - 1.f) * influence : 1.f;
             return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
                            pivot.y + (p.y - pivot.y) * scaleY };
-        });
+        }, trackedPoints);
     }
     if (const auto* stretch = std::get_if<StretchOp>(&op)) {
         const Vec2f pivot = pivotOf(stretch->pivot, stretch->pivotFallback);
@@ -1199,7 +1211,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float scaleX = influence > 0.f ? 1.f + (1.f / factor - 1.f) * influence : 1.f;
             return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
                            pivot.y + (p.y - pivot.y) * scaleY };
-        });
+        }, trackedPoints);
     }
     if (const auto* bend = std::get_if<BendOp>(&op)) {
         const Rect2i box = rasterBounds(source);
@@ -1215,7 +1227,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float s = std::sin(angle);
             return Vec2f { originX + c * dx - s * dy + bend->angle * t,
                            originY + s * dx + c * dy };
-        });
+        }, trackedPoints);
     }
     if (const auto* warp = std::get_if<WarpOp>(&op)) {
         return displaceRaster(source, [&](Vec2f p) {
@@ -1234,7 +1246,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
                 moved.y += warp->displacements[i].y * weight;
             }
             return moved;
-        });
+        }, trackedPoints);
     }
     if (const auto* weighted = std::get_if<WeightedDeformOp>(&op)) {
         return displaceRaster(source, [&](Vec2f p) {
@@ -1254,7 +1266,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
                 moved.y += (weighted->handleTargets[i].y - handle.y) * weight;
             }
             return moved;
-        });
+        }, trackedPoints);
     }
     if (const auto* pin = std::get_if<PinDeformOp>(&op)) {
         return displaceRaster(source, [&](Vec2f p) {
@@ -1276,7 +1288,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
                 moved.y += offset.y / totalWeight;
             }
             return moved;
-        });
+        }, trackedPoints);
     }
     if (const auto* lattice = std::get_if<LatticeDeformOp>(&op)) {
         const Rect2i box = rasterBounds(source);
@@ -1309,7 +1321,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
                 (p00.x * (1 - fx) + p10.x * fx) * (1 - fy) + (p01.x * (1 - fx) + p11.x * fx) * fy,
                 (p00.y * (1 - fx) + p10.y * fx) * (1 - fy) + (p01.y * (1 - fx) + p11.y * fx) * fy
             };
-        });
+        }, trackedPoints);
     }
     if (const auto* path = std::get_if<PathDeformOp>(&op)) {
         const GeometryData* geometry = env.impl->findGeometry(path->path);
@@ -1344,7 +1356,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float dy = b.y - a.y;
             const float length = std::max(0.001f, std::sqrt(dx * dx + dy * dy));
             return Vec2f { onPath.x - dy / length * offsetY, onPath.y + dx / length * offsetY };
-        });
+        }, trackedPoints);
     }
     if (const auto* envelope = std::get_if<EnvelopeDeformOp>(&op)) {
         const GeometryData* geometry = env.impl->findGeometry(envelope->envelopeCurve);
@@ -1371,7 +1383,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float targetY = points[index].y + (points[index + 1].y - points[index].y) * local;
             const float depth = applyFalloff((p.y - top) / height, envelope->falloff);
             return Vec2f { p.x, p.y + (targetY - top) * depth * envelope->strength };
-        });
+        }, trackedPoints);
     }
     if (const auto* boundaryDeform = std::get_if<BoundaryDeformOp>(&op)) {
         const GeometryData* target = env.impl->findGeometry(boundaryDeform->targetShape);
@@ -1393,7 +1405,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float strength = clamp01(boundaryDeform->strength);
             return Vec2f { p.x + (mapped.x - p.x) * strength,
                            p.y + (mapped.y - p.y) * strength };
-        });
+        }, trackedPoints);
     }
 
     return source;
@@ -2035,9 +2047,26 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
                 env.note("op " + std::to_string(opId.value) + ": transform recorded, not resolved");
                 continue;
             }
-            std::function<Vec2f(Vec2f)> mapPoint;
+            // A Global pattern travels with its object, so its origin is moved
+            // by whatever moved the content, affine or not. A Fixed pattern is
+            // left out of the list and so never moves.
+            std::vector<Vec2f> travellingOrigins;
+            std::vector<size_t> travellingIndices;
+            for (size_t i = 0; i < deferred.size(); ++i) {
+                if (deferred[i].anchor == PatternAnchor::Global) {
+                    travellingOrigins.push_back(deferred[i].origin);
+                    travellingIndices.push_back(i);
+                }
+            }
+
             syncTagAlpha();
-            result.raster = applyTransformOperation(env, data->op, result.raster, &mapPoint);
+            result.raster = applyTransformOperation(
+                env, data->op, result.raster,
+                travellingOrigins.empty() ? nullptr : &travellingOrigins);
+
+            for (size_t i = 0; i < travellingIndices.size(); ++i) {
+                deferred[travellingIndices[i]].origin = travellingOrigins[i];
+            }
 
             if (!deferred.empty() && !tagPlane.empty()) {
                 // Carry provenance with the pixels. The tag pass runs without a
@@ -2046,16 +2075,6 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
                 tagEnv.samplePolicy = {};
                 tagEnv.trace = nullptr;
                 tagPlane = applyTransformOperation(tagEnv, data->op, tagPlane);
-
-                // A Global pattern travels with its object, so its origin moves
-                // with the content. A Fixed pattern never moves.
-                if (mapPoint) {
-                    for (DeferredFill& fill : deferred) {
-                        if (fill.anchor == PatternAnchor::Global) {
-                            fill.origin = mapPoint(fill.origin);
-                        }
-                    }
-                }
             }
             env.note("op " + std::to_string(opId.value) + ": resolved " +
                      std::string(operationTypeName(data->op)) + " over layer content");

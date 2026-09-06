@@ -375,6 +375,54 @@ void testAnchorModes() {
     LS_CHECK(bandedByRow(fixed.rotated, 8));
 }
 
+// A Global pattern must follow its object through a free-form deform, not only
+// through an affine transform. A single-pin deform is a pure translation, which
+// makes the expected phase exactly checkable.
+void testAnchorFollowsDeform() {
+    auto ctx = LSContext::create();
+    const Color dark {20, 20, 20, 255};
+    const Color light {240, 240, 240, 255};
+
+    auto build = [&](PatternAnchor anchor, bool deform) {
+        const Scene scene = makeScene(*ctx, {8.f, 8.f}, 8.f, 32);
+        FillDitherOp dither;
+        dither.targetRegion = scene.region;
+        dither.ramp = ctx->createRamp(scene.doc, {"two", {{0.f, dark}, {1.f, light}}, true}).value;
+        dither.pattern = ctx->createDitherPattern(scene.doc,
+                                                  DitherPatternKind::HorizontalLines).value;
+        dither.density = 0.5f;
+        dither.anchor = anchor;
+        ctx->addOperation(scene.layer, dither);
+
+        if (deform) {
+            PinDeformOp pin;
+            pin.targetLayer = scene.layer;
+            pin.pins = {{12.f, 12.f}};
+            pin.pinTargets = {{17.f, 15.f}};    // a clean translation of (5, 3)
+            ctx->addOperation(scene.layer, pin);
+        }
+
+        auto compiled = ctx->compileSprite(scene.sprite, exportProfile());
+        return compiled.value.raster;
+    };
+
+    const std::vector<Color> baseline = patternRelativeToShape(build(PatternAnchor::Global, false),
+                                                              {8, 8}, 8);
+    const std::vector<Color> deformedGlobal =
+        patternRelativeToShape(build(PatternAnchor::Global, true), {13, 11}, 8);
+    const std::vector<Color> deformedFixed =
+        patternRelativeToShape(build(PatternAnchor::Fixed, true), {13, 11}, 8);
+
+    // The deform really did move the shape.
+    LS_CHECK(countOf(baseline, dark) > 0 && countOf(deformedGlobal, dark) > 0);
+
+    // Global followed the shape through the deform: same pattern phase.
+    LS_CHECK(deformedGlobal == baseline);
+
+    // Fixed stayed with the canvas, so the shape slid over the pattern.
+    LS_CHECK(deformedFixed != baseline);
+}
+
 void testAnchorSurvivesSaveLoad() {
     auto ctx = LSContext::create();
     const Scene scene = makeScene(*ctx, {8.f, 8.f}, 10.f, 32);
@@ -420,6 +468,7 @@ int main() {
     testPatternLibrary();
     testExternalPatterns();
     testAnchorModes();
+    testAnchorFollowsDeform();
     testAnchorSurvivesSaveLoad();
     return lstest::report("dither");
 }
