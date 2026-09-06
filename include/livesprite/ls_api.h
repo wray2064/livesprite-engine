@@ -458,6 +458,13 @@ public:
     VoidResult          swapPalette(SpriteId sprite, PaletteId newPalette);
     VoidResult          remapRamp(RampId ramp, PaletteId fromPalette, PaletteId toPalette);
 
+    // Give a region a standing colour role: a fill targeting it that names no
+    // role of its own paints this one, so "this shape is skin" is said once and
+    // survives a palette swap.
+    VoidResult          bindRegionToPaletteRole(RegionId region, ColorRole role);
+    VoidResult          unbindRegionPaletteRole(RegionId region);
+    Result<ColorRole>   getRegionPaletteRole(RegionId region) const;
+
     Result<Color>       resolveSemanticColor(PaletteId palette, ColorRole role) const;
     Result<ColorRole>   nearestPaletteColor(PaletteId palette, Color color) const;
     VoidResult          quantizeToPalette(RasterBuffer& buffer, PaletteId palette) const;

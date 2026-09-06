@@ -439,6 +439,124 @@ void testSamplingPolicies() {
     LS_CHECK(sampled(SamplingPolicy::Median).pixels == median.pixels);
 }
 
+// --- standing colour roles -------------------------------------------------
+
+void testRegionRoleBinding() {
+    auto ctx = LSContext::create();
+    const Stage stage = makeStage(*ctx);
+
+    const PaletteId palette = ctx->createPalette(stage.doc, {"figure", {
+        {0, {30, 30, 40, 255}, "ink"},
+        {1, {180, 140, 100, 255}, "skin"}}}).value;
+    LS_CHECK(ctx->bindSpritePalette(stage.sprite, palette).ok());
+
+    const GeometryId rect = ctx->createRect(stage.doc, {{10.f, 10.f}, 10.f, 10.f, 0.f}).value;
+    const RegionId region = ctx->createRegionFromGeometry(rect).value;
+
+    // The region carries the role, so the fill does not have to name it.
+    LS_CHECK(ctx->bindRegionToPaletteRole(region, 1).ok());
+    LS_CHECK(ctx->getRegionPaletteRole(region).value == 1u);
+
+    FillSolidOp fill;
+    fill.targetRegion = region;
+    fill.fallbackColor = {255, 0, 255, 255};    // used only if nothing resolves
+    LS_CHECK(ctx->addOperation(stage.layer, fill).ok());
+
+    CompileProfile profile = exportProfile();
+    auto compiled = ctx->compileSprite(stage.sprite, profile);
+    LS_REQUIRE(compiled.ok());
+    LS_CHECK(readPixel(compiled.value.raster, 12, 12) == Color{180, 140, 100, 255});
+
+    // A palette swap reaches it, which is the point of binding a role rather
+    // than painting a literal colour.
+    LS_CHECK(ctx->setPaletteColor(palette, 1, {90, 160, 210, 255}).ok());
+    auto swapped = ctx->compileSprite(stage.sprite, profile);
+    LS_CHECK(readPixel(swapped.value.raster, 12, 12) == Color{90, 160, 210, 255});
+
+    // A role named on the operation still wins over the standing one.
+    FillSolidOp explicitRole;
+    explicitRole.targetRegion = region;
+    explicitRole.paletteRole = 0;
+    LS_CHECK(ctx->addOperation(stage.layer, explicitRole).ok());
+    auto overridden = ctx->compileSprite(stage.sprite, profile);
+    LS_CHECK(readPixel(overridden.value.raster, 12, 12) == Color{30, 30, 40, 255});
+
+    // Unbinding puts the literal colour back in charge.
+    LS_CHECK(ctx->unbindRegionPaletteRole(region).ok());
+    LS_CHECK(ctx->getRegionPaletteRole(region).value == kColorRoleNone);
+    LS_CHECK(ctx->bindRegionToPaletteRole(region, kColorRoleNone).fail());
+
+    // The binding survives a save and load.
+    LS_CHECK(ctx->bindRegionToPaletteRole(region, 1).ok());
+    auto saved = ctx->serializeDocument(stage.doc);
+    LS_REQUIRE(saved.ok());
+    auto loaded = LSContext::create();
+    LS_REQUIRE(loaded->deserializeDocument(saved.value).ok());
+    bool foundBinding = false;
+    for (uint64_t candidate = 1; candidate < 4096 && !foundBinding; ++candidate) {
+        auto role = loaded->getRegionPaletteRole(RegionId{candidate});
+        foundBinding = role.ok() && role.value == 1u;
+    }
+    LS_CHECK(foundBinding);
+}
+
+// --- assembly caching ------------------------------------------------------
+
+void testAssemblyCaching() {
+    auto ctx = LSContext::create();
+    const Stage stage = makeStage(*ctx, 48);
+
+    auto block = [&](SpriteId sprite, Vec2f origin, Color color) {
+        const LayerId layer = ctx->createLayer(sprite, {"part"}).value;
+        const GeometryId rect = ctx->createRect(stage.doc, {origin, 8.f, 8.f, 0.f}).value;
+        const RegionId region = ctx->createRegionFromGeometry(rect).value;
+        FillSolidOp fill;
+        fill.targetRegion = region;
+        fill.fallbackColor = color;
+        ctx->addOperation(layer, fill);
+        return layer;
+    };
+
+    block(stage.sprite, {16.f, 16.f}, Color::white());
+    const SocketId socket = ctx->addSocket(stage.sprite, {"mount", {24.f, 24.f}, 0.f}).value;
+    const SpriteId child = ctx->createSprite(stage.doc).value;
+    const LayerId childLayer = block(child, {0.f, 0.f}, Color{200, 120, 60, 255});
+    ctx->createPivot(child, PivotDesc{"root", {4.f, 4.f}});
+    LS_CHECK(ctx->attachSprite(child, socket).ok());
+
+    LS_REQUIRE(ctx->compileAssembly(stage.sprite, exportProfile(48)).ok());
+
+    // A repeat with nothing changed comes from the cache.
+    const size_t hitsBefore = ctx->cacheStats().hits;
+    LS_REQUIRE(ctx->compileAssembly(stage.sprite, exportProfile(48)).ok());
+    LS_CHECK(ctx->cacheStats().hits > hitsBefore);
+
+    // Changing a child invalidates the assembly: it is only as fresh as the
+    // least fresh sprite in it.
+    LS_CHECK(ctx->setLayerVisibility(childLayer, false).ok());
+    auto afterChild = ctx->compileAssembly(stage.sprite, exportProfile(48));
+    LS_REQUIRE(afterChild.ok());
+    LS_CHECK(opaqueCount(afterChild.value.raster) == 64);
+    LS_CHECK(ctx->setLayerVisibility(childLayer, true).ok());
+
+    // So does attaching or detaching, which changes the shape of the tree.
+    auto withChild = ctx->compileAssembly(stage.sprite, exportProfile(48));
+    LS_REQUIRE(withChild.ok());
+    LS_CHECK(ctx->detachSprite(child).ok());
+    auto withoutChild = ctx->compileAssembly(stage.sprite, exportProfile(48));
+    LS_REQUIRE(withoutChild.ok());
+    LS_CHECK(opaqueCount(withoutChild.value.raster) < opaqueCount(withChild.value.raster));
+
+    // A sprite compile and the assembly under it are separate cache entries
+    // even though they share an id.
+    auto spriteOnly = ctx->compileSprite(stage.sprite, exportProfile(48));
+    LS_REQUIRE(spriteOnly.ok());
+    LS_CHECK(ctx->attachSprite(child, socket).ok());
+    auto assembled = ctx->compileAssembly(stage.sprite, exportProfile(48));
+    LS_REQUIRE(assembled.ok());
+    LS_CHECK(assembled.value.raster.pixels != spriteOnly.value.raster.pixels);
+}
+
 } // namespace
 
 int main() {
@@ -449,5 +567,7 @@ int main() {
     testGroupsSurviveSaveLoad();
     testRoundingPolicies();
     testSamplingPolicies();
+    testRegionRoleBinding();
+    testAssemblyCaching();
     return lstest::report("render");
 }

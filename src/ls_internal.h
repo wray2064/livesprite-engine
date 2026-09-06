@@ -78,6 +78,7 @@ struct RegionData {
     IntervalSet coverage;
     IntervalSet boundary;    // authored closed loop, when the region came from pixels
     GeometryId  source;      // null unless the region was built from geometry
+    ColorRole   role = kColorRoleNone;   // standing role, used by fills that name none
 };
 
 struct OperationData {
@@ -143,17 +144,22 @@ struct BoundaryField {
 // Dependency graph and compile cache
 // ---------------------------------------------------------------------------
 
+enum class CacheKind : uint8_t { Layer, Sprite, Assembly };
+
 struct CacheKey {
-    uint64_t entity           = 0;
-    uint64_t profileHash      = 0;
-    uint64_t resourceRevision = 0;   // palettes, ramps, and patterns in use
-    uint32_t engineVersion    = 0;
+    uint64_t  entity           = 0;
+    uint64_t  profileHash      = 0;
+    uint64_t  resourceRevision = 0;   // palettes, ramps, and patterns in use
+    uint32_t  engineVersion    = 0;
+    CacheKind kind             = CacheKind::Sprite;   // a sprite and the assembly
+                                                      // under it share an id
 
     bool operator<(const CacheKey& o) const {
         if (entity != o.entity)                     return entity < o.entity;
         if (profileHash != o.profileHash)           return profileHash < o.profileHash;
         if (resourceRevision != o.resourceRevision) return resourceRevision < o.resourceRevision;
-        return engineVersion < o.engineVersion;
+        if (engineVersion != o.engineVersion)       return engineVersion < o.engineVersion;
+        return kind < o.kind;
     }
 };
 

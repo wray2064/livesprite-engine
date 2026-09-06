@@ -57,7 +57,9 @@ The first time final raster pixels exist is at `CompileToRaster()`. Everywhere e
 ```
 livesprite_engine/
 ├── LIVESPRITE_ENGINE_SPEC.md       ← this file
+├── Livesprite architecture.txt     ← the wider design: engine, Fast, Pract
 ├── CMakeLists.txt
+├── build.bat                       ← configure and build through the VS toolchain
 ├── include/
 │   └── livesprite/
 │       ├── livesprite.h            ← master include (include this, get everything)
@@ -66,13 +68,31 @@ livesprite_engine/
 │       ├── ls_operations.h         ← all operation data types (the Op structs)
 │       ├── ls_api.h                ← LSContext — the main engine API
 │       └── ls_plugin.h             ← plugin/extension registration interface
-└── src/
-    ├── ls_context.cpp              ← LSContext implementation (PIMPL)
-    ├── ls_geometry.cpp             ← geometry math
-    ├── ls_compile.cpp              ← compilation pipeline
-    ├── ls_dependency.cpp           ← dependency graph and cache
-    └── ls_serialize.cpp            ← serialization / migration
+├── src/
+│   ├── ls_internal.h               ← engine-private state (LSContext::Impl)
+│   ├── ls_reflect.h                ← one field table per operation
+│   ├── ls_context.cpp              ← LSContext implementation (PIMPL)
+│   ├── ls_geometry.cpp             ← geometry math
+│   ├── ls_compile.cpp              ← compilation pipeline
+│   ├── ls_dependency.cpp           ← dependency graph and cache
+│   ├── ls_instructions.cpp         ← addressable parameters, live frames
+│   ├── ls_serialize.cpp            ← serialization / migration
+│   └── ls_json.cpp                 ← deterministic JSON for the save format
+├── tests/                          ← one suite per area, run under ctest
+└── tools/
+    └── ls_testbed.cpp              ← renders the engine into a gallery page
 ```
+
+Three files are not in the original plan and earn their place:
+
+- `ls_internal.h` holds `LSContext::Impl`, so the implementation files share one
+  definition of engine state without exposing it in a public header.
+- `ls_reflect.h` holds one field table per operation. Serialization walks it,
+  and so does live parameter addressing, so a field cannot be saveable but not
+  drivable, or the reverse.
+- `ls_json.cpp` is a small deterministic JSON writer and parser. The save format
+  is text, and two saves of the same document must be byte identical, which
+  rules out a hash-ordered library.
 
 ---
 
@@ -261,7 +281,11 @@ Plugin interface can come last.
 - **Thread safety:** `LSContext` is not thread-safe. Caller is responsible for locking if needed. (Single-threaded compilation is fine for v1.)
 - **PIMPL:** `LSContext` uses PIMPL to keep implementation details out of headers.
 - **Naming:** `lowerCamelCase` for methods, `UpperCamelCase` for types, `ls_` prefix on all public headers, `ls::` namespace for all public symbols.
-- **No RTTI, no exceptions** in engine core.
+- **No RTTI**: enforced by the build (`/GR-` on MSVC, `-fno-rtti` elsewhere).
+- **No exceptions across the API boundary**: every entry point returns
+  `ls::Result<T>`. Raster allocation, the one operation that can fail for
+  reasons outside the document, catches for itself and returns
+  `LSError::RasterAllocationFailed`.
 
 ---
 

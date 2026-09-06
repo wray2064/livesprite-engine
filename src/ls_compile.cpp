@@ -38,7 +38,15 @@ Result<RasterBuffer> allocateRaster(uint32_t width, uint32_t height) {
     raster.height = height;
     raster.stride = width * 4;
     const size_t bytes = static_cast<size_t>(raster.stride) * height;
-    raster.pixels.resize(bytes, 0);
+
+    // The one place the engine can fail for reasons outside the document. An
+    // allocation failure becomes a Result rather than an exception, because the
+    // API boundary promises no exceptions cross it.
+    try {
+        raster.pixels.resize(bytes, 0);
+    } catch (...) {
+        return Result<RasterBuffer>::err(LSError::RasterAllocationFailed);
+    }
     if (raster.pixels.size() != bytes) {
         return Result<RasterBuffer>::err(LSError::RasterAllocationFailed);
     }
@@ -669,6 +677,17 @@ struct CompileEnv {
     SamplePolicyFn samplePolicy;         // set when the profile names a plugin policy
 
     Color role(ColorRole colorRole, Color fallback) const {
+        return impl->resolveColorRole(palette, colorRole, fallback);
+    }
+
+    // A fill that names no role inherits the standing role of the region it
+    // paints, so the binding is what carries a palette swap into the artwork.
+    Color roleForRegion(ColorRole colorRole, RegionId region, Color fallback) const {
+        if (colorRole == kColorRoleNone) {
+            if (const RegionData* data = impl->findRegion(region)) {
+                colorRole = data->role;
+            }
+        }
         return impl->resolveColorRole(palette, colorRole, fallback);
     }
 
@@ -1533,7 +1552,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const Color color = env.role(fill->paletteRole, fill->fallbackColor);
+        const Color color = env.roleForRegion(fill->paletteRole, fill->targetRegion,
+                                              fill->fallbackColor);
         out.coverage = *coverage;
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = fill->blend;
@@ -1545,7 +1565,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const Color color = env.role(fill->paletteRole, Color::black());
+        const Color color = env.roleForRegion(fill->paletteRole, fill->targetRegion,
+                                              Color::black());
         out.coverage = *coverage;
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = fill->blend;
@@ -1993,6 +2014,7 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
     key.profileHash = impl_->hashProfile(resolved);
     key.resourceRevision = impl_->resourceRevision;
     key.engineVersion = LS_ENGINE_VERSION;
+    key.kind = CacheKind::Layer;
     auto cached = impl_->compileCache.find(key);
     if (cached != impl_->compileCache.end() && impl_->graph.dirty.count(id.value) == 0) {
         ++impl_->cacheHits;
@@ -2442,6 +2464,7 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
     key.profileHash = impl_->hashProfile(resolved);
     key.resourceRevision = impl_->resourceRevision;
     key.engineVersion = LS_ENGINE_VERSION;
+    key.kind = CacheKind::Sprite;
     auto cached = impl_->compileCache.find(key);
     if (cached != impl_->compileCache.end() && impl_->graph.dirty.count(id.value) == 0) {
         ++impl_->cacheHits;
@@ -2663,6 +2686,26 @@ Result<CompileResult> LSContext::compileAssembly(SpriteId root, const CompilePro
         return Result<CompileResult>::err(order.error);
     }
 
+    // An assembly is only as fresh as the least fresh sprite in it, which is
+    // why the check runs over the whole tree rather than over the root alone.
+    CacheKey key;
+    key.entity = root.value;
+    key.profileHash = impl_->hashProfile(resolved);
+    key.resourceRevision = impl_->resourceRevision;
+    key.engineVersion = LS_ENGINE_VERSION;
+    key.kind = CacheKind::Assembly;
+
+    bool anyDirty = false;
+    for (SpriteId spriteId : order.value) {
+        anyDirty = anyDirty || impl_->graph.dirty.count(spriteId.value) != 0;
+    }
+    auto cached = impl_->compileCache.find(key);
+    if (!anyDirty && cached != impl_->compileCache.end()) {
+        ++impl_->cacheHits;
+        return Result<CompileResult>::ok(cached->second);
+    }
+    ++impl_->cacheMisses;
+
     auto allocated = allocateRaster(resolved.outputWidth, resolved.outputHeight);
     if (allocated.fail()) {
         return Result<CompileResult>::err(allocated.error);
@@ -2724,6 +2767,7 @@ Result<CompileResult> LSContext::compileAssembly(SpriteId root, const CompilePro
     if (resolved.type == CompileProfileType::BoundsOnly) {
         result.raster = RasterBuffer{};
     }
+    impl_->compileCache[key] = result;
     return Result<CompileResult>::ok(result);
 }
 

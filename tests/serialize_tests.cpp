@@ -279,6 +279,39 @@ void testVersionMigration() {
     LS_CHECK(refuser->deserializeDocument(corrupt).fail());
 }
 
+// The chain that carries an old file forward. No breaking version has shipped,
+// so what is testable now is that same-major files pass through, that a major
+// with no route is refused rather than half read, and that the refusal is the
+// migration error rather than a parse failure.
+void testMigrationChain() {
+    auto ctx = LSContext::create();
+    const Built built = buildDocument(*ctx);
+    auto saved = ctx->serializeDocument(built.doc);
+    LS_REQUIRE(saved.ok());
+
+    // Same major, older patch: passes through and restamps.
+    SerializedData older = saved.value;
+    older.engineVersion = LS_ENGINE_VERSION - 1;
+    auto forward = ctx->migrateVersion(older, LS_ENGINE_VERSION);
+    LS_REQUIRE(forward.ok());
+    LS_CHECK(forward.value.engineVersion == LS_ENGINE_VERSION);
+    auto loaded = LSContext::create();
+    LS_CHECK(loaded->deserializeDocument(forward.value).ok());
+
+    // The engine is at major 0, so there is no older major to migrate from yet:
+    // the walk itself becomes reachable when the first step is registered.
+    // What is reachable now is that a target this build cannot produce is
+    // refused rather than approximated.
+    auto reader = LSContext::create();
+    LS_CHECK(ctx->migrateVersion(saved.value, LS_ENGINE_VERSION + (1u << 16)).error ==
+             LSError::VersionMigrationFailed);
+
+    // A future major is refused at the door.
+    SerializedData future = saved.value;
+    future.engineVersion = LS_ENGINE_VERSION + (1u << 16);
+    LS_CHECK(reader->deserializeDocument(future).error == LSError::VersionMismatch);
+}
+
 } // namespace
 
 int main() {
@@ -287,5 +320,6 @@ int main() {
     testForwardCompatibility();
     testSpritePortability();
     testVersionMigration();
+    testMigrationChain();
     return lstest::report("serialize");
 }

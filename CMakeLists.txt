@@ -23,11 +23,14 @@ target_include_directories(livesprite
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# The spec calls for no RTTI, and for no exception to cross the API boundary.
+# RTTI is switched off in the compiler; the boundary is held by returning
+# ls::Result<T>, with the one operation that can genuinely fail at runtime
+# (raster allocation) catching for itself.
 if (MSVC)
-    # No exceptions, no RTTI: the engine returns ls::Result<T> instead.
-    target_compile_options(livesprite PRIVATE /W4 /WX)
+    target_compile_options(livesprite PRIVATE /W4 /WX /GR-)
 else()
-    target_compile_options(livesprite PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(livesprite PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-rtti)
 endif()
 
 option(LS_BUILD_TESTBED "Build the engine testbed gallery tool" ON)

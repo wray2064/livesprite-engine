@@ -450,6 +450,59 @@ bool readGeometryShape(const json::Value& obj, const DecodeContext& ctx,
     return false;
 }
 
+// --- version migration -----------------------------------------------------
+//
+// A step rewrites a document from one major version to the next. Steps chain,
+// so a v1 file reaches v3 by running v1->v2 then v2->v3, and a version with no
+// route to the current one is refused rather than half read.
+//
+// The table is empty because no breaking version has shipped. Adding one means
+// writing the rewrite and listing it here; the walk below needs no changes.
+struct MigrationStep {
+    uint32_t fromMajor = 0;
+    uint32_t toMajor = 0;
+    bool (*apply)(json::Value& root) = nullptr;
+};
+
+const std::vector<MigrationStep>& migrationSteps() {
+    static const std::vector<MigrationStep> steps;
+    return steps;
+}
+
+inline uint32_t majorOf(uint32_t version) { return version >> 16; }
+
+// Walk the chain from one major version to another, rewriting as it goes.
+LSError migrateJson(json::Value& root, uint32_t from, uint32_t to) {
+    uint32_t current = majorOf(from);
+    const uint32_t target = majorOf(to);
+    if (current == target) {
+        return LSError::None;
+    }
+    if (current > target) {
+        // Downgrading would have to discard whatever the newer version added.
+        return LSError::VersionMigrationFailed;
+    }
+
+    for (int guard = 0; guard < 64 && current != target; ++guard) {
+        const MigrationStep* next = nullptr;
+        for (const MigrationStep& step : migrationSteps()) {
+            if (step.fromMajor == current) {
+                next = &step;
+                break;
+            }
+        }
+        if (next == nullptr || next->apply == nullptr) {
+            return LSError::VersionMigrationFailed;
+        }
+        if (!next->apply(root)) {
+            return LSError::VersionMigrationFailed;
+        }
+        current = next->toMajor;
+    }
+
+    return current == target ? LSError::None : LSError::VersionMigrationFailed;
+}
+
 std::vector<uint8_t> toBytes(const std::string& text) {
     return std::vector<uint8_t>(text.begin(), text.end());
 }
@@ -639,6 +692,7 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
         obj["source"] = enc(data->source);
         obj["coverage"] = enc(data->coverage);
         obj["boundary"] = enc(data->boundary);
+        obj["role"] = enc(data->role);
         regions.push(std::move(obj));
     }
     root["regions"] = std::move(regions);
@@ -822,6 +876,13 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
     if (!json::parse(fromBytes(data.bytes), root) || !root.isObject()) {
         return Result<DocumentId>::err(LSError::DeserializationFailure);
     }
+
+    // An older major is brought forward through the migration chain first, so
+    // the reader below only ever sees the current schema.
+    const LSError migrated = migrateJson(root, data.engineVersion, LS_ENGINE_VERSION);
+    if (migrated != LSError::None) {
+        return Result<DocumentId>::err(migrated);
+    }
     const json::Value* documentObj = root.find("document");
     if (documentObj == nullptr || !documentObj->isObject()) {
         return Result<DocumentId>::err(LSError::DeserializationFailure);
@@ -932,6 +993,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             reader.field("source", region.source);
             reader.field("coverage", region.coverage);
             reader.field("boundary", region.boundary);
+            reader.field("role", region.role);
             const std::string unknown = collectUnknown(item, consumed);
             if (!unknown.empty()) {
                 impl.unknownFields[id] = unknown;
@@ -1356,15 +1418,15 @@ Result<SerializedData> LSContext::migrateVersion(const SerializedData& data, uin
         // This build cannot invent a future schema.
         return Result<SerializedData>::err(LSError::VersionMigrationFailed);
     }
-    if ((data.engineVersion >> 16) != (targetVersion >> 16)) {
-        // Major version steps need an explicit migration function; none exists
-        // yet because the format has not had a breaking change.
-        return Result<SerializedData>::err(LSError::VersionMigrationFailed);
-    }
 
     json::Value root;
     if (!json::parse(fromBytes(data.bytes), root) || !root.isObject()) {
         return Result<SerializedData>::err(LSError::DeserializationFailure);
+    }
+
+    const LSError stepped = migrateJson(root, data.engineVersion, targetVersion);
+    if (stepped != LSError::None) {
+        return Result<SerializedData>::err(stepped);
     }
 
     // Within a major version the schema is additive, so migration rewrites the

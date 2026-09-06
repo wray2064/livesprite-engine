@@ -1948,6 +1948,37 @@ VoidResult LSContext::remapRamp(RampId ramp, PaletteId fromPalette, PaletteId to
     return VoidResult::success();
 }
 
+VoidResult LSContext::bindRegionToPaletteRole(RegionId region, ColorRole role) {
+    RegionData* data = impl_->findRegion(region);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (role == kColorRoleNone) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    data->role = role;
+    impl_->markDirtyInternal(region.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::unbindRegionPaletteRole(RegionId region) {
+    RegionData* data = impl_->findRegion(region);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->role = kColorRoleNone;
+    impl_->markDirtyInternal(region.value);
+    return VoidResult::success();
+}
+
+Result<ColorRole> LSContext::getRegionPaletteRole(RegionId region) const {
+    const RegionData* data = impl_->findRegion(region);
+    if (data == nullptr) {
+        return Result<ColorRole>::err(LSError::InvalidId);
+    }
+    return Result<ColorRole>::ok(data->role);
+}
+
 Result<Color> LSContext::resolveSemanticColor(PaletteId palette, ColorRole role) const {
     const PaletteData* data = impl_->findPalette(palette);
     if (data == nullptr) {
@@ -3023,6 +3054,8 @@ VoidResult LSContext::attachSprite(SpriteId child, const AttachmentDesc& request
     childData->attached = true;
     impl_->addDependencyEdge(socket->sprite.value, child.value);
     impl_->markDirtyInternal(child.value);
+    // The parent assembly changed shape, not just the child.
+    impl_->markDirtyInternal(socket->sprite.value);
     return VoidResult::success();
 }
 
@@ -3034,9 +3067,13 @@ VoidResult LSContext::detachSprite(SpriteId child) {
     if (!data->attached) {
         return VoidResult::err(LSError::InvalidParameter);
     }
+    const SocketData* socket = impl_->findSocket(data->attachment.socket);
     data->attached = false;
     data->attachment = AttachmentDesc{};
     impl_->markDirtyInternal(child.value);
+    if (socket != nullptr) {
+        impl_->markDirtyInternal(socket->sprite.value);
+    }
     return VoidResult::success();
 }
 
