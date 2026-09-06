@@ -16,6 +16,7 @@
 
 #include <memory>
 #include <string>
+#include <variant>
 #include <string_view>
 #include <vector>
 
@@ -188,6 +189,95 @@ struct SerializedData {
     uint32_t                engineVersion = LS_ENGINE_VERSION;
     std::string             formatTag;    // "livesprite/document", "livesprite/sprite"
 };
+
+// ---------------------------------------------------------------------------
+// Live instructions
+//
+// The engine knows nothing about time, keyframes, easing or tracks. What it
+// offers is this: every operation parameter is addressable by name, every
+// instruction states an absolute value rather than a delta, and a batch of them
+// lands as one frame followed by one compile.
+//
+// Absolute values are the important half. An app scrubbing a timeline backwards
+// must get the same pixels it got going forwards, which it cannot if the engine
+// accumulates deltas.
+// ---------------------------------------------------------------------------
+
+enum class ParameterType : uint8_t {
+    Unsupported,   // a field this interface cannot address, such as a point list
+    Bool,
+    Int,           // integers and enumerations
+    Float,
+    Vec2,
+    Color,
+    Matrix,
+    Text,
+    EntityId,      // a handle: region, ramp, pattern, pivot, socket, ...
+};
+
+using ParameterValue = std::variant<
+    bool,
+    int64_t,
+    float,
+    Vec2f,
+    Color,
+    Mat3f,
+    std::string,
+    uint64_t
+>;
+
+struct ParameterInfo {
+    std::string   name;
+    ParameterType type = ParameterType::Unsupported;
+};
+
+// The instruction set. Each one names what to change and the value to change it
+// to; none of them are relative.
+struct SetOperationParameter {
+    OperationId    operation;
+    std::string    parameter;
+    ParameterValue value;
+};
+
+struct SetSpriteTransformInstruction {
+    SpriteId sprite;
+    Mat3f    transform;
+};
+
+struct SetLayerVisibilityInstruction {
+    LayerId layer;
+    bool    visible = true;
+};
+
+struct SetLayerOpacityInstruction {
+    LayerId layer;
+    float   opacity = 1.f;
+};
+
+struct SetPaletteColorInstruction {
+    PaletteId palette;
+    ColorRole role = kColorRoleNone;
+    Color     color;
+};
+
+struct AttachInstruction {
+    SpriteId       child;
+    AttachmentDesc attachment;
+};
+
+struct DetachInstruction {
+    SpriteId child;
+};
+
+using Instruction = std::variant<
+    SetOperationParameter,
+    SetSpriteTransformInstruction,
+    SetLayerVisibilityInstruction,
+    SetLayerOpacityInstruction,
+    SetPaletteColorInstruction,
+    AttachInstruction,
+    DetachInstruction
+>;
 
 struct CacheStats {
     size_t entries      = 0;
@@ -498,6 +588,27 @@ public:
     Result<IntervalSet>     convertMaskToIntervals(const RasterBuffer& mask, float alphaThreshold = 0.5f) const;
     Result<RegionId>        convertRasterToRegionData(DocumentId doc, const RasterBuffer& raster,
                                                       const TraceBoundaryParams& params);
+
+    // =======================================================================
+    // Live instructions
+    // =======================================================================
+
+    // What can be driven on an operation, and what type each field takes.
+    Result<std::vector<ParameterInfo>> describeOperation(OperationId id) const;
+    Result<ParameterValue> getOperationParameter(OperationId id, std::string_view name) const;
+    VoidResult             setOperationParameter(OperationId id, std::string_view name,
+                                                 const ParameterValue& value);
+
+    // Apply a batch as one frame. Every instruction is validated before any is
+    // applied, so a bad instruction leaves the document untouched rather than
+    // half posed.
+    VoidResult applyInstructions(const std::vector<Instruction>& instructions);
+
+    // Apply a frame and compile it: the whole assembly under root, so an
+    // articulated figure renders in one call.
+    Result<CompileResult> renderFrame(SpriteId root,
+                                      const std::vector<Instruction>& instructions,
+                                      const CompileProfile& profile);
 
     // =======================================================================
     // SECTION 16: Dependency and Cache

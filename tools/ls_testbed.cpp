@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <utility>
 #include <cstring>
 #include <filesystem>
 #include <set>
@@ -992,6 +993,82 @@ Scene sceneAttachment(const Options& options) {
     return scene;
 }
 
+Scene sceneInstructions(const Options& options) {
+    (void)options;
+    Scene scene;
+    scene.id = "frames";
+    scene.title = "Driving the engine with instructions";
+    scene.blurb = "Six frames of a swing. The document is built once; each frame is a batch of "
+                  "instructions naming parameters and absolute values, followed by one compile. "
+                  "The engine has no idea these frames form a sequence, or that time exists.";
+
+    auto ctx = LSContext::create();
+    const uint32_t size = 48;
+
+    const DocumentId doc = ctx->createDocument({"frames", size, size}).value;
+    const PaletteId palette = ctx->createPalette(doc, {"figure", {
+        {0, {26, 28, 38, 255}, "ink"},
+        {1, {196, 158, 122, 255}, "skin"},
+        {2, {92, 112, 160, 255}, "cloth"}}}).value;
+
+    auto part = [&](Vec2f origin, Vec2f extent, ColorRole role) {
+        const SpriteId sprite = ctx->createSprite(doc).value;
+        ctx->bindSpritePalette(sprite, palette);
+        const LayerId layer = ctx->createLayer(sprite, {"part"}).value;
+        const GeometryId rect = ctx->createRect(doc, {origin, extent.x, extent.y, 1.f}).value;
+        const RegionId region = ctx->createRegionFromGeometry(rect).value;
+        FillSemanticColorOp fill;
+        fill.targetRegion = region;
+        fill.paletteRole = role;
+        ctx->addOperation(layer, fill);
+        GenerateOuterOutlineOp outline;
+        outline.targetRegion = region;
+        outline.paletteRole = 0;
+        ctx->addOperation(layer, outline);
+        return std::make_pair(sprite, layer);
+    };
+
+    const auto body = part({19.f, 18.f}, {10.f, 18.f}, 2);
+    const SocketId shoulder = ctx->addSocket(body.first, {"shoulder", {28.f, 21.f}, 0.f}).value;
+
+    const auto arm = part({0.f, 0.f}, {4.f, 14.f}, 1);
+    ctx->createPivot(arm.first, PivotDesc{"root", {2.f, 1.f}});
+    const SocketId grip = ctx->addSocket(arm.first, {"grip", {2.f, 13.f}, 0.f}).value;
+    ctx->attachSprite(arm.first, shoulder);
+
+    const auto sword = part({0.f, 0.f}, {3.f, 15.f}, 1);
+    ctx->createPivot(sword.first, PivotDesc{"hilt", {1.f, 13.f}});
+    ctx->attachSprite(sword.first, grip);
+
+    // The swing, as an app would send it: absolute values, one batch per frame.
+    const float swing[] = {-50.f, -20.f, 10.f, 40.f, 70.f, 100.f};
+    std::vector<RasterBuffer> frames;
+    for (float angle : swing) {
+        SetSpriteTransformInstruction pose;
+        pose.sprite = arm.first;
+        pose.transform = Mat3f::aroundPivot(Mat3f::rotation(angle), {2.f, 1.f});
+
+        auto rendered = ctx->renderFrame(body.first, {pose}, profileFor(size));
+        frames.push_back(rendered.value.raster);
+
+        std::ostringstream label;
+        label << "frame " << (frames.size()) << ": " << static_cast<int>(angle) << " degrees";
+        scene.panels.push_back({label.str(), "", rendered.value.raster, "", ""});
+    }
+
+    // Replaying an earlier frame must reproduce it exactly: instructions carry
+    // absolute values, so scrubbing backwards is not a different picture.
+    SetSpriteTransformInstruction replay;
+    replay.sprite = arm.first;
+    replay.transform = Mat3f::aroundPivot(Mat3f::rotation(swing[1]), {2.f, 1.f});
+    auto scrubbed = ctx->renderFrame(body.first, {replay}, profileFor(size));
+
+    scene.verdict = (scrubbed.ok() && scrubbed.value.raster.pixels == frames[1].pixels)
+        ? "scrubbing back to frame 2 reproduced it pixel for pixel"
+        : "MISMATCH: replaying frame 2 did not reproduce it";
+    return scene;
+}
+
 // --- gallery ---------------------------------------------------------------
 
 std::string escapeHtml(const std::string& text) {
@@ -1162,6 +1239,7 @@ int main(int argc, char** argv) {
     scenes.push_back(sceneDeforms(options));
     scenes.push_back(sceneRegionMath(options));
     scenes.push_back(sceneAttachment(options));
+    scenes.push_back(sceneInstructions(options));
     scenes.push_back(sceneRoundTrip(options));
 
     if (!writePanels(options, scenes) || !writeGallery(options, scenes)) {

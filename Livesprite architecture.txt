@@ -296,11 +296,6 @@ Skew
 Squash
 Stretch
 MatrixTransform
-PivotTransform
-AnchorTransform
-TransformRegion
-TransformLayer
-TransformSprite
 
 Every transform should accept:
 
@@ -310,6 +305,29 @@ coordinate space
 rounding policy
 sampling policy
 bounds policy
+
+Targeting replaces the separate TransformRegion / TransformLayer / TransformSprite
+entries: one operation carries targetRegion, targetLayer and target, and the
+narrowest one set wins. A transform with a region applies to that region, else
+to the layer, else to the sprite that owns the operation.
+
+Two entries from the original list are deliberately absent.
+
+PivotTransform is not an operation. It rotated and scaled about a pivot, which
+is Rotate followed by Scale, both of which already take a pivot.
+
+AnchorTransform is not an operation either. Attaching one sprite to another
+sprite socket is not a per layer transform: it is a relationship between two
+sprites, so it lives as attachment state (see section 12) and is set through
+attachSprite. Keeping it as an operation as well meant two mechanisms could
+place the same child in two different places.
+
+Placing a whole sprite is also not an operation. A sprite carries its own
+transform, set through setSpriteTransform or composed through translateSprite,
+rotateSprite, scaleSprite and mirrorSprite. That transform is the single frame
+that sockets, pivots and attached children all resolve through, so moving a
+sprite moves everything hanging off it. Operations transform content inside a
+sprite; the sprite transform places the sprite itself.
 
 The core does not care if a transform came from a canvas gizmo, Animotron keyframe, Practipuppet, or importer.
 
@@ -353,10 +371,19 @@ Pivot
 
 Expose:
 
+CreatePivot
 SetPivot
 GetPivot
 MovePivot
+FindPivot
+PlacePivot
+GetPivotWorldPosition
 TransformAroundPivot
+
+A pivot is named, so an app can find it without holding the id, and can be
+placed from the compiled bounds (content centre, top, bottom, top left, or
+canvas centre) so it follows the artwork instead of being retyped when the
+drawing changes.
 
 Meaning:
 
@@ -369,12 +396,42 @@ AddSocket
 RemoveSocket
 MoveSocket
 RotateSocket
-ResolveSocketAttachment
+SetSocketScale
+FindSocket
 GetSocketTransform
+GetSocketWorldTransform
+GetSocketWorldPosition
+ResolveSocketAttachment
 
 Meaning:
 
 where another sprite’s pivot connects
+
+A socket is a named frame on a sprite: position, orientation and scale. The
+local transform is the frame as authored; the world transform is that frame
+after the sprite own transform and every attachment above it, so a socket on a
+turning arm turns with the arm.
+
+Attachment
+
+Expose:
+
+AttachSprite
+DetachSprite
+GetAttachment
+GetAttachedSprites
+AssemblyOrder
+CompileAssembly
+
+Meaning:
+
+a sprite hangs off at most one socket, presenting one of its own pivots
+
+An attachment carries an optional joint offset and a flag for compositing under
+the parent instead of over it. Chains resolve to any depth. Attaching rejects a
+cycle rather than building one, and the pivot offered to a socket has to belong
+to the child. AssemblyOrder walks the tree in compositing order; CompileAssembly
+compiles each sprite from its own operations and places it by the chain.
 
 Core knows attachment math.
 

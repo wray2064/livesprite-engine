@@ -57,6 +57,13 @@ void LSContext::Impl::registerOperationDependencies(OperationId id) {
         return;
     }
 
+    // The layer reads this operation. This edge is intrinsic and has to be
+    // restored here, because clearDependenciesOf drops every edge touching the
+    // operation before an edit re-registers it. Without it, a second edit to
+    // the same operation would never reach the layer and the layer would keep
+    // serving a cached compile.
+    addDependencyEdge(id.value, data->layer.value);
+
     for (uint64_t dependency : operationDependencies(data->op)) {
         addDependencyEdge(dependency, id.value);
     }
