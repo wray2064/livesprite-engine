@@ -226,7 +226,6 @@ struct LSContext::Impl {
 
     // --- ownership --------------------------------------------------------
     DocumentId documentOfSprite(SpriteId id) const;
-    DocumentId documentOfLayer(LayerId id) const;
     SpriteId   spriteOfLayer(LayerId id) const;
 
     // --- dependency graph (implemented in ls_dependency.cpp) ---------------

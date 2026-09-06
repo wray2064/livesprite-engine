@@ -273,10 +273,6 @@ SpriteId LSContext::Impl::spriteOfLayer(LayerId id) const {
     return layer ? layer->sprite : SpriteId::null();
 }
 
-DocumentId LSContext::Impl::documentOfLayer(LayerId id) const {
-    return documentOfSprite(spriteOfLayer(id));
-}
-
 PaletteId LSContext::Impl::effectivePalette(SpriteId sprite) const {
     const SpriteData* data = findSprite(sprite);
     if (data == nullptr) {
