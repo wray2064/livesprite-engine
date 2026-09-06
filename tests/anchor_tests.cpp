@@ -329,6 +329,81 @@ void testAssemblyCompile() {
     LS_CHECK(order.value.front() == pack.sprite);   // drawn before the parent
 }
 
+// One way to place a sprite. The convenience helpers compose the sprite
+// transform, so they move sockets and attached children too: an app never has
+// to choose between two mechanisms that disagree.
+void testStreamlinedPlacement() {
+    auto ctx = LSContext::create();
+    auto doc = ctx->createDocument({"placement", 48, 48});
+    const Color bodyColor {200, 200, 220, 255};
+    const Color swordColor {220, 120, 60, 255};
+
+    const Part body = makePart(*ctx, doc.value, {20.f, 18.f}, {8.f, 14.f}, bodyColor);
+    const Part sword = makePart(*ctx, doc.value, {0.f, 0.f}, {3.f, 10.f}, swordColor);
+    const SocketId grip = ctx->addSocket(body.sprite, {"grip", {30.f, 24.f}, 0.f}).value;
+    const PivotId bodyPivot = ctx->createPivot(body.sprite, PivotDesc{"root", {24.f, 24.f}}).value;
+    ctx->createPivot(sword.sprite, PivotDesc{"hilt", {1.f, 9.f}});
+
+    // The shorthand: the child offers its own pivot, no desc needed.
+    LS_CHECK(ctx->attachSprite(sword.sprite, grip).ok());
+    LS_CHECK(ctx->getAttachment(sword.sprite).value.parent == body.sprite);
+
+    // Placing through the helper is the same thing as setting the transform:
+    // the socket moves, so the attached sword moves with it.
+    const Vec2f gripBefore = ctx->getSocketWorldPosition(grip).value;
+    LS_CHECK(ctx->translateSprite(body.sprite, {4.f, 2.f}).ok());
+    const Vec2f gripAfter = ctx->getSocketWorldPosition(grip).value;
+    LS_CHECK(nearPoint(gripAfter, gripBefore.x + 4.f, gripBefore.y + 2.f));
+    LS_CHECK(nearPoint(ctx->getPivotWorldPosition(
+        ctx->getAttachment(sword.sprite).value.childPivot).value, gripAfter.x, gripAfter.y));
+
+    // Helpers compose, and the composition is visible in one place.
+    LS_CHECK(ctx->resetSpriteTransform(body.sprite).ok());
+    LS_CHECK(ctx->rotateSprite(body.sprite, 90.f, bodyPivot).ok());
+    const Mat3f expected = Mat3f::aroundPivot(Mat3f::rotation(90.f), {24.f, 24.f});
+    const Mat3f actual = ctx->getSpriteTransform(body.sprite).value;
+    bool sameMatrix = true;
+    for (int i = 0; i < 9; ++i) {
+        sameMatrix = sameMatrix && near(actual.m[i], expected.m[i]);
+    }
+    LS_CHECK(sameMatrix);
+
+    // A quarter turn about (24,24) sends the grip at (30,24) to (24,30).
+    LS_CHECK(nearPoint(ctx->getSocketWorldPosition(grip).value, 24.f, 30.f));
+
+    // The rotation reached the compiled picture as well as the maths.
+    auto assembled = ctx->compileAssembly(body.sprite, exportProfile());
+    LS_REQUIRE(assembled.ok());
+    LS_CHECK(readPixel(assembled.value.raster, 24, 30) == swordColor);
+
+    // With no pivot named, a sprite turns about its own pivot.
+    LS_CHECK(ctx->resetSpriteTransform(body.sprite).ok());
+    LS_CHECK(ctx->rotateSprite(body.sprite, 90.f).ok());
+    LS_CHECK(nearPoint(ctx->getSocketWorldPosition(grip).value, 24.f, 30.f));
+
+    LS_CHECK(ctx->scaleSprite(body.sprite, {0.f, 1.f}).fail());
+    LS_CHECK(ctx->resetSpriteTransform(body.sprite).ok());
+    LS_CHECK(ctx->mirrorSprite(body.sprite, MirrorAxis::X, bodyPivot).ok());
+    LS_CHECK(nearPoint(ctx->getSocketWorldPosition(grip).value, 18.f, 24.f));
+}
+
+// The removed operations must stay removed: a file naming one is refused rather
+// than half loaded, so a stale document cannot resurrect a second mechanism.
+void testRetiredOperationsAreRejected() {
+    auto ctx = LSContext::create();
+    auto doc = ctx->createDocument({"retired", 32, 32});
+    const Part part = makePart(*ctx, doc.value, {4.f, 4.f}, {4.f, 4.f}, Color::white());
+
+    LS_CHECK(ctx->deserializeOperation(part.layer,
+        "{\"type\":\"AnchorTransformOp\",\"child\":0,\"socket\":0}").fail());
+    LS_CHECK(ctx->deserializeOperation(part.layer,
+        "{\"type\":\"PivotTransformOp\",\"angleDegrees\":90}").fail());
+
+    // The op that replaced them is still there and still works.
+    LS_CHECK(ctx->deserializeOperation(part.layer,
+        "{\"type\":\"RotateOp\",\"angleDegrees\":90}").ok());
+}
+
 void testAssemblySurvivesSaveLoad() {
     auto ctx = LSContext::create();
     auto doc = ctx->createDocument({"persist", 48, 48});
@@ -392,6 +467,8 @@ int main() {
     testAttachmentChain();
     testAttachmentRejectsCycles();
     testAssemblyCompile();
+    testStreamlinedPlacement();
+    testRetiredOperationsAreRejected();
     testAssemblySurvivesSaveLoad();
     return lstest::report("anchors");
 }

@@ -394,12 +394,16 @@ public:
     // Each appends the corresponding operation to the sprite top layer.
     // =======================================================================
 
-    Result<OperationId> translateSprite(SpriteId sprite, Vec2f delta, PivotId pivot = PivotId::null());
-    Result<OperationId> rotateSprite(SpriteId sprite, float angleDeg, PivotId pivot = PivotId::null());
-    Result<OperationId> scaleSprite(SpriteId sprite, Vec2f factor, PivotId pivot = PivotId::null());
-    Result<OperationId> mirrorSprite(SpriteId sprite, MirrorAxis axis, PivotId pivot = PivotId::null());
-    Result<OperationId> squashSprite(SpriteId sprite, float factor, BoundaryId boundary, PivotId pivot);
-    Result<OperationId> stretchSprite(SpriteId sprite, float factor, BoundaryId boundary, PivotId pivot);
+    // Sprite placement. These compose into the sprite transform, which is the
+    // single thing sockets, pivots and attached children resolve through, so a
+    // sprite moved here brings its whole assembly with it. Deforms are not here
+    // on purpose: a squash with a boundary and a falloff is not a matrix, so it
+    // stays an operation added with addOperation.
+    VoidResult  translateSprite(SpriteId sprite, Vec2f delta);
+    VoidResult  rotateSprite(SpriteId sprite, float angleDeg, PivotId pivot = PivotId::null());
+    VoidResult  scaleSprite(SpriteId sprite, Vec2f factor, PivotId pivot = PivotId::null());
+    VoidResult  mirrorSprite(SpriteId sprite, MirrorAxis axis, PivotId pivot = PivotId::null());
+    VoidResult  resetSpriteTransform(SpriteId sprite);
 
     // =======================================================================
     // SECTION 12: Spatial Anchors (Pivot, Socket, Boundary)
@@ -450,6 +454,8 @@ public:
     // A sprite hangs off at most one socket. Attaching rejects a cycle rather
     // than building one.
     VoidResult          attachSprite(SpriteId child, const AttachmentDesc& desc);
+    // Shorthand: the child offers its own pivot.
+    VoidResult          attachSprite(SpriteId child, SocketId socket);
     VoidResult          detachSprite(SpriteId child);
     Result<AttachmentInfo> getAttachment(SpriteId child) const;
     Result<std::vector<SpriteId>> getAttachedSprites(SocketId socket) const;

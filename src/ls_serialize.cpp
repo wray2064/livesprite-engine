@@ -464,12 +464,6 @@ template<typename Ar> void mapOp(Ar& ar, StretchOp& op) {
 template<typename Ar> void mapOp(Ar& ar, MatrixTransformOp& op) {
     F(target) F(targetLayer) F(targetRegion) F(matrix) F(coordinateSpace) F(rounding) F(sampling)
 }
-template<typename Ar> void mapOp(Ar& ar, PivotTransformOp& op) {
-    F(target) F(targetLayer) F(pivot) F(angleDegrees) F(scale) F(rounding) F(sampling)
-}
-template<typename Ar> void mapOp(Ar& ar, AnchorTransformOp& op) {
-    F(child) F(socket) F(childPivot) F(localOffset)
-}
 template<typename Ar> void mapOp(Ar& ar, BendOp& op) {
     F(targetRegion) F(targetLayer) F(boundary) F(strength) F(angle) F(falloff) F(coordinateSpace)
 }
@@ -558,7 +552,7 @@ bool readOperation(const json::Value& obj, const DecodeContext& ctx,
            tryType(ResolveOutlineCollisionsOp{}) || tryType(TranslateOp{}) || tryType(RotateOp{}) ||
            tryType(ScaleOp{}) || tryType(MirrorOp{}) || tryType(ShearOp{}) || tryType(SkewOp{}) ||
            tryType(SquashOp{}) || tryType(StretchOp{}) || tryType(MatrixTransformOp{}) ||
-           tryType(PivotTransformOp{}) || tryType(AnchorTransformOp{}) || tryType(BendOp{}) ||
+           tryType(BendOp{}) ||
            tryType(WarpOp{}) || tryType(LatticeDeformOp{}) || tryType(EnvelopeDeformOp{}) ||
            tryType(PinDeformOp{}) || tryType(WeightedDeformOp{}) || tryType(BoundaryDeformOp{}) ||
            tryType(PathDeformOp{}) || tryType(PluginOp{});

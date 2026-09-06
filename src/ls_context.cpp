@@ -121,8 +121,6 @@ std::string_view operationTypeName(const Operation& op) {
         LS_OP_NAME(SquashOp)
         LS_OP_NAME(StretchOp)
         LS_OP_NAME(MatrixTransformOp)
-        LS_OP_NAME(PivotTransformOp)
-        LS_OP_NAME(AnchorTransformOp)
         LS_OP_NAME(BendOp)
         LS_OP_NAME(WarpOp)
         LS_OP_NAME(LatticeDeformOp)
@@ -145,8 +143,6 @@ bool operationIsTransform(const Operation& op) {
                std::is_same_v<Op, ShearOp>     || std::is_same_v<Op, SkewOp> ||
                std::is_same_v<Op, SquashOp>    || std::is_same_v<Op, StretchOp> ||
                std::is_same_v<Op, MatrixTransformOp> ||
-               std::is_same_v<Op, PivotTransformOp>  ||
-               std::is_same_v<Op, AnchorTransformOp> ||
                std::is_same_v<Op, BendOp>  || std::is_same_v<Op, WarpOp> ||
                std::is_same_v<Op, LatticeDeformOp>  ||
                std::is_same_v<Op, EnvelopeDeformOp> ||
@@ -2350,90 +2346,81 @@ Result<PatternTileDesc> LSContext::getPattern(PatternId id) const {
 // ---------------------------------------------------------------------------
 
 namespace {
-Result<LayerId> topLayerOf(LSContext::Impl& impl, SpriteId sprite) {
-    SpriteData* data = impl.findSprite(sprite);
-    if (data == nullptr) {
-        return Result<LayerId>::err(LSError::InvalidId);
+
+// The point a sprite level transform turns about: the pivot named, else the
+// sprite own pivot, else the origin.
+Vec2f pivotPointOf(const LSContext::Impl& impl, SpriteId sprite, PivotId pivot) {
+    if (const PivotData* named = impl.findPivot(pivot)) {
+        return named->position;
     }
-    if (data->layers.empty()) {
-        return Result<LayerId>::err(LSError::InvalidParameter);
+    if (const SpriteData* data = impl.findSprite(sprite)) {
+        if (const PivotData* own = impl.findPivot(data->pivot)) {
+            return own->position;
+        }
     }
-    return Result<LayerId>::ok(data->layers.back());
+    return { 0.f, 0.f };
 }
+
 } // namespace
 
-Result<OperationId> LSContext::translateSprite(SpriteId sprite, Vec2f delta, PivotId pivot) {
-    auto layer = topLayerOf(*impl_, sprite);
-    if (layer.fail()) {
-        return Result<OperationId>::err(layer.error);
+// These compose into the sprite transform rather than appending operations to a
+// layer. That matters: the sprite transform is what sockets, pivots and
+// attached children all resolve through, so a sprite turned here takes
+// everything hanging off it along. Deforms stay operations, because a squash
+// with a boundary and a falloff is not a matrix; add those with addOperation.
+
+VoidResult LSContext::translateSprite(SpriteId sprite, Vec2f delta) {
+    SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
     }
-    TranslateOp op;
-    op.target = sprite;
-    op.delta = delta;
-    op.pivot = pivot;
-    return addOperation(layer.value, op);
+    data->transform = Mat3f::translation(delta).mul(data->transform);
+    impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
 }
 
-Result<OperationId> LSContext::rotateSprite(SpriteId sprite, float angleDeg, PivotId pivot) {
-    auto layer = topLayerOf(*impl_, sprite);
-    if (layer.fail()) {
-        return Result<OperationId>::err(layer.error);
+VoidResult LSContext::rotateSprite(SpriteId sprite, float angleDeg, PivotId pivot) {
+    SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
     }
-    RotateOp op;
-    op.target = sprite;
-    op.angleDegrees = angleDeg;
-    op.pivot = pivot;
-    return addOperation(layer.value, op);
+    const Vec2f about = pivotPointOf(*impl_, sprite, pivot);
+    data->transform = Mat3f::aroundPivot(Mat3f::rotation(angleDeg), about).mul(data->transform);
+    impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
 }
 
-Result<OperationId> LSContext::scaleSprite(SpriteId sprite, Vec2f factor, PivotId pivot) {
-    auto layer = topLayerOf(*impl_, sprite);
-    if (layer.fail()) {
-        return Result<OperationId>::err(layer.error);
+VoidResult LSContext::scaleSprite(SpriteId sprite, Vec2f factor, PivotId pivot) {
+    SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
     }
-    ScaleOp op;
-    op.target = sprite;
-    op.factor = factor;
-    op.pivot = pivot;
-    return addOperation(layer.value, op);
+    if (factor.x == 0.f || factor.y == 0.f) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    const Vec2f about = pivotPointOf(*impl_, sprite, pivot);
+    data->transform = Mat3f::aroundPivot(Mat3f::scaling(factor), about).mul(data->transform);
+    impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
 }
 
-Result<OperationId> LSContext::mirrorSprite(SpriteId sprite, MirrorAxis axis, PivotId pivot) {
-    auto layer = topLayerOf(*impl_, sprite);
-    if (layer.fail()) {
-        return Result<OperationId>::err(layer.error);
+VoidResult LSContext::mirrorSprite(SpriteId sprite, MirrorAxis axis, PivotId pivot) {
+    SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
     }
-    MirrorOp op;
-    op.target = sprite;
-    op.axis = axis;
-    op.pivot = pivot;
-    return addOperation(layer.value, op);
+    const Vec2f about = pivotPointOf(*impl_, sprite, pivot);
+    const Vec2f factor {
+        axis == MirrorAxis::Y ? 1.f : -1.f,
+        axis == MirrorAxis::X ? 1.f : -1.f
+    };
+    data->transform = Mat3f::aroundPivot(Mat3f::scaling(factor), about).mul(data->transform);
+    impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
 }
 
-Result<OperationId> LSContext::squashSprite(SpriteId sprite, float factor, BoundaryId boundary, PivotId pivot) {
-    auto layer = topLayerOf(*impl_, sprite);
-    if (layer.fail()) {
-        return Result<OperationId>::err(layer.error);
-    }
-    SquashOp op;
-    op.target = sprite;
-    op.factor = factor;
-    op.boundary = boundary;
-    op.pivot = pivot;
-    return addOperation(layer.value, op);
-}
-
-Result<OperationId> LSContext::stretchSprite(SpriteId sprite, float factor, BoundaryId boundary, PivotId pivot) {
-    auto layer = topLayerOf(*impl_, sprite);
-    if (layer.fail()) {
-        return Result<OperationId>::err(layer.error);
-    }
-    StretchOp op;
-    op.target = sprite;
-    op.factor = factor;
-    op.boundary = boundary;
-    op.pivot = pivot;
-    return addOperation(layer.value, op);
+VoidResult LSContext::resetSpriteTransform(SpriteId sprite) {
+    return setSpriteTransform(sprite, Mat3f::identity());
 }
 
 // ---------------------------------------------------------------------------
@@ -2768,11 +2755,23 @@ Result<Mat3f> LSContext::resolveSocketAttachment(SocketId socket, PivotId childP
 
 // --- attachments -----------------------------------------------------------
 
-VoidResult LSContext::attachSprite(SpriteId child, const AttachmentDesc& desc) {
+VoidResult LSContext::attachSprite(SpriteId child, SocketId socket) {
+    AttachmentDesc desc;
+    desc.socket = socket;
+    return attachSprite(child, desc);
+}
+
+VoidResult LSContext::attachSprite(SpriteId child, const AttachmentDesc& request) {
     SpriteData* childData = impl_->findSprite(child);
-    const SocketData* socket = impl_->findSocket(desc.socket);
+    const SocketData* socket = impl_->findSocket(request.socket);
     if (childData == nullptr || socket == nullptr) {
         return VoidResult::err(LSError::InvalidId);
+    }
+
+    // An unnamed pivot means the child offers its own.
+    AttachmentDesc desc = request;
+    if (!desc.childPivot.valid()) {
+        desc.childPivot = childData->pivot;
     }
     const PivotData* pivot = impl_->findPivot(desc.childPivot);
     if (pivot == nullptr || pivot->sprite != child) {

@@ -1143,26 +1143,6 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     if (const auto* matrixOp = std::get_if<MatrixTransformOp>(&op)) {
         return runMatrix(matrixOp->matrix, matrixOp->targetRegion, matrixOp->sampling);
     }
-    if (const auto* pivotOp = std::get_if<PivotTransformOp>(&op)) {
-        const Vec2f pivot = pivotOf(pivotOp->pivot, {});
-        const Mat3f matrix = Mat3f::aroundPivot(
-            Mat3f::rotation(pivotOp->angleDegrees).mul(Mat3f::scaling(pivotOp->scale)), pivot);
-        return runMatrix(matrix, RegionId::null(), pivotOp->sampling);
-    }
-    if (const auto* anchor = std::get_if<AnchorTransformOp>(&op)) {
-        const SocketData* socket = env.impl->findSocket(anchor->socket);
-        const PivotData* pivot = env.impl->findPivot(anchor->childPivot);
-        if (socket == nullptr) {
-            return source;
-        }
-        Mat3f matrix = Mat3f::translation(socket->desc.position)
-                           .mul(Mat3f::rotation(socket->desc.angle))
-                           .mul(anchor->localOffset);
-        if (pivot != nullptr) {
-            matrix = matrix.mul(Mat3f::translation({ -pivot->position.x, -pivot->position.y }));
-        }
-        return runMatrix(matrix, RegionId::null(), SamplingPolicy::Coverage);
-    }
 
     // --- deforms: displacement fields -------------------------------------
 

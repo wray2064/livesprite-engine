@@ -372,22 +372,10 @@ struct MatrixTransformOp {
     SamplingPolicy  sampling            = SamplingPolicy::Coverage;
 };
 
-struct PivotTransformOp {
-    SpriteId        target;
-    LayerId         targetLayer;
-    PivotId         pivot;
-    float           angleDegrees        = 0.f;
-    Vec2f           scale               = {1.f, 1.f};
-    RoundingPolicy  rounding            = RoundingPolicy::Nearest;
-    SamplingPolicy  sampling            = SamplingPolicy::Coverage;
-};
-
-struct AnchorTransformOp {
-    SpriteId        child;
-    SocketId        socket;
-    PivotId         childPivot;
-    Mat3f           localOffset;        // additional local transform at attachment
-};
+// There is deliberately no operation for rotating and scaling about a pivot:
+// RotateOp and ScaleOp both take a pivot already. Nor is there one for
+// attaching to a socket: attachment is sprite level state, set through
+// attachSprite, so there is exactly one place to read it from.
 
 // ---------------------------------------------------------------------------
 // 5. DEFORMATION OPERATIONS
@@ -535,8 +523,6 @@ using Operation = std::variant<
     SquashOp,
     StretchOp,
     MatrixTransformOp,
-    PivotTransformOp,
-    AnchorTransformOp,
     // Deforms
     BendOp,
     WarpOp,

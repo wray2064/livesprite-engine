@@ -939,8 +939,9 @@ Scene sceneAttachment(const Options& options) {
         swordToArm.childPivot = hilt;
         ctx->attachSprite(sword, swordToArm);
 
-        // The only thing that changes across panels.
-        ctx->setSpriteTransform(arm, Mat3f::aroundPivot(Mat3f::rotation(angle), {2.f, 1.f}));
+        // The only thing that changes across panels, through the same helper an
+        // app would call.
+        ctx->rotateSprite(arm, angle, armRoot);
 
         // The body compiled on its own: proof that nothing about it changed
         // between panels, whatever the arm happens to cover.
