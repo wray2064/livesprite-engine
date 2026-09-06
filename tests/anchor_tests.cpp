@@ -459,6 +459,125 @@ void testAssemblySurvivesSaveLoad() {
     LS_CHECK(loaded->getPivotName(restoredAttachment.value.childPivot).value == "hilt");
 }
 
+// Deleting or unsocketing must not leave a child holding a handle to something
+// that is gone.
+void testTeardownDetaches() {
+    auto ctx = LSContext::create();
+    auto doc = ctx->createDocument({"teardown", 48, 48});
+
+    const Part body = makePart(*ctx, doc.value, {20.f, 20.f}, {8.f, 8.f}, Color::white());
+    const Part arm = makePart(*ctx, doc.value, {0.f, 0.f}, {4.f, 10.f}, Color::white());
+    const Part tool = makePart(*ctx, doc.value, {0.f, 0.f}, {3.f, 6.f}, Color::white());
+
+    const SocketId shoulder = ctx->addSocket(body.sprite, {"shoulder", {28.f, 22.f}, 0.f}).value;
+    ctx->createPivot(arm.sprite, PivotDesc{"root", {2.f, 0.f}});
+    const SocketId grip = ctx->addSocket(arm.sprite, {"grip", {2.f, 10.f}, 0.f}).value;
+    ctx->createPivot(tool.sprite, PivotDesc{"root", {1.f, 5.f}});
+
+    LS_CHECK(ctx->attachSprite(arm.sprite, shoulder).ok());
+    LS_CHECK(ctx->attachSprite(tool.sprite, grip).ok());
+
+    // Removing a socket releases whatever hung from it.
+    LS_CHECK(ctx->removeSocket(grip).ok());
+    LS_CHECK(ctx->getAttachment(tool.sprite).fail());
+    LS_CHECK(ctx->assemblyOrder(body.sprite).value.size() == 2);
+
+    // Deleting a parent releases its children, and they are still usable.
+    LS_CHECK(ctx->deleteSprite(body.sprite).ok());
+    LS_CHECK(ctx->getAttachment(arm.sprite).fail());
+    LS_CHECK(ctx->getSpriteInfo(arm.sprite).ok());
+    auto orphan = ctx->compileSprite(arm.sprite, exportProfile());
+    LS_CHECK(orphan.ok());
+    LS_CHECK(ctx->assemblyOrder(arm.sprite).value.size() == 1);
+}
+
+// A clone is a copy of the whole sprite: where it sits, and what it hangs from.
+void testCloneCarriesPlacement() {
+    auto ctx = LSContext::create();
+    auto doc = ctx->createDocument({"clone", 48, 48});
+
+    const Part body = makePart(*ctx, doc.value, {20.f, 18.f}, {8.f, 14.f}, Color::white());
+    const Part sword = makePart(*ctx, doc.value, {0.f, 0.f}, {3.f, 10.f}, Color{220, 120, 60, 255});
+    const SocketId grip = ctx->addSocket(body.sprite, {"grip", {30.f, 24.f}, 0.f}).value;
+    ctx->createPivot(sword.sprite, PivotDesc{"hilt", {1.f, 9.f}});
+
+    LS_CHECK(ctx->attachSprite(sword.sprite, grip).ok());
+    LS_CHECK(ctx->setSpriteTransform(sword.sprite, Mat3f::translation({1.f, 2.f})).ok());
+
+    auto clone = ctx->cloneSprite(sword.sprite);
+    LS_REQUIRE(clone.ok());
+
+    // The clone kept its own placement.
+    LS_CHECK(ctx->getSpriteTransform(clone.value).value.m[2] == 1.f);
+    LS_CHECK(ctx->getSpriteTransform(clone.value).value.m[5] == 2.f);
+
+    // And hangs from the same socket, through its own copy of the pivot.
+    auto attachment = ctx->getAttachment(clone.value);
+    LS_REQUIRE(attachment.ok());
+    LS_CHECK(attachment.value.socket == grip);
+    LS_CHECK(attachment.value.childPivot != ctx->getAttachment(sword.sprite).value.childPivot);
+    LS_CHECK(ctx->getPivotName(attachment.value.childPivot).value == "hilt");
+
+    // Both land in the same place, because they describe the same placement.
+    LS_CHECK(nearPoint(ctx->getSpriteWorldTransform(clone.value).value.transformPoint({0.f, 0.f}),
+                       ctx->getSpriteWorldTransform(sword.sprite).value.transformPoint({0.f, 0.f}).x,
+                       ctx->getSpriteWorldTransform(sword.sprite).value.transformPoint({0.f, 0.f}).y));
+    LS_CHECK(ctx->getAttachedSprites(grip).value.size() == 2);
+}
+
+// The influence a boundary reports is the influence the compiler applies.
+void testBoundaryFalloffIsShared() {
+    auto ctx = LSContext::create();
+    auto doc = ctx->createDocument({"falloff", 48, 48});
+    const Part blob = makePart(*ctx, doc.value, {14.f, 14.f}, {20.f, 20.f}, Color::white());
+
+    const GeometryId zone = ctx->createRect(doc.value, {{14.f, 14.f}, 20.f, 20.f, 0.f}).value;
+    const BoundaryId boundary =
+        ctx->createBoundary(blob.sprite, {"zone", zone, Falloff::Linear, 6.f}).value;
+
+    // A soft boundary reports a gradient, not an on/off answer.
+    const float edge = ctx->getBoundaryInfluence(boundary, {14.5f, 24.f}).value;
+    const float middle = ctx->getBoundaryInfluence(boundary, {19.f, 24.f}).value;
+    const float core = ctx->getBoundaryInfluence(boundary, {24.f, 24.f}).value;
+    LS_CHECK(near(edge, 0.f, 0.001f));
+    LS_CHECK(middle > edge && middle < core);
+    LS_CHECK(near(core, 1.f, 0.001f));
+    LS_CHECK(ctx->getBoundaryInfluence(boundary, {2.f, 2.f}).value == 0.f);
+
+    // A squash scoped to that boundary moves interior pixels further than edge
+    // pixels: the compiler is reading the same gradient.
+    auto flat = ctx->compileSprite(blob.sprite, exportProfile());
+    LS_REQUIRE(flat.ok());
+
+    SquashOp squash;
+    squash.targetLayer = blob.layer;
+    squash.boundary = boundary;
+    squash.factor = 0.5f;
+    squash.pivotFallback = {24.f, 24.f};
+    squash.falloff = Falloff::Linear;
+    LS_CHECK(ctx->addOperation(blob.layer, squash).ok());
+
+    auto squashed = ctx->compileSprite(blob.sprite, exportProfile());
+    LS_REQUIRE(squashed.ok());
+    LS_CHECK(squashed.value.raster.pixels != flat.value.raster.pixels);
+
+    // A hard boundary of the same shape squashes differently from a soft one,
+    // which is only true if the falloff reaches the compiler at all.
+    LS_CHECK(ctx->createBoundary(blob.sprite, {"hard", zone, Falloff::Linear, 0.f}).ok());
+    const BoundaryId hard = ctx->findSocket(blob.sprite, "nothing").ok()
+        ? BoundaryId::null()
+        : ctx->getSpriteInfo(blob.sprite).value.boundaries.back();
+    auto stored = ctx->getOperation(ctx->getLayerOperations(blob.layer).value.back().id);
+    LS_REQUIRE(stored.ok());
+    SquashOp hardSquash = std::get<SquashOp>(stored.value);
+    hardSquash.boundary = hard;
+    LS_CHECK(ctx->updateOperation(ctx->getLayerOperations(blob.layer).value.back().id,
+                                  hardSquash).ok());
+    auto hardResult = ctx->compileSprite(blob.sprite, exportProfile());
+    LS_REQUIRE(hardResult.ok());
+    LS_CHECK(hardResult.value.raster.pixels != squashed.value.raster.pixels);
+}
+
 } // namespace
 
 int main() {
@@ -470,5 +589,8 @@ int main() {
     testStreamlinedPlacement();
     testRetiredOperationsAreRejected();
     testAssemblySurvivesSaveLoad();
+    testTeardownDetaches();
+    testCloneCarriesPlacement();
+    testBoundaryFalloffIsShared();
     return lstest::report("anchors");
 }

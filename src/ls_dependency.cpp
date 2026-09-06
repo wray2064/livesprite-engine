@@ -113,6 +113,16 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
 }
 
 void LSContext::Impl::invalidateCacheFor(uint64_t entityId) {
+    // A boundary field is derived from geometry, so it is dropped whenever
+    // either the boundary or anything it reads is dirtied.
+    boundaryFields.erase(entityId);
+    for (auto it = boundaryFields.begin(); it != boundaryFields.end(); ) {
+        const BoundaryData* boundary = findBoundary(BoundaryId{it->first});
+        it = (boundary == nullptr || boundary->desc.shape.value == entityId)
+            ? boundaryFields.erase(it)
+            : std::next(it);
+    }
+
     for (auto it = compileCache.begin(); it != compileCache.end(); ) {
         it = it->first.entity == entityId ? compileCache.erase(it) : std::next(it);
     }

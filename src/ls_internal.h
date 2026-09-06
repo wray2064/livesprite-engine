@@ -120,6 +120,26 @@ struct BoundaryData {
 };
 
 // ---------------------------------------------------------------------------
+// Boundary influence
+//
+// How strongly a boundary holds a point: 1 deep inside, falling to 0 across
+// falloffWidth as it approaches the edge, 0 outside. Computed once per boundary
+// and shared, so the query API and the compile path cannot disagree about the
+// same boundary.
+// ---------------------------------------------------------------------------
+
+float applyFalloffCurve(float t, Falloff falloff);
+
+struct BoundaryField {
+    IntervalSet coverage;
+    std::map<uint64_t, int32_t> depth;   // pixel key -> shells survived
+    float   width = 0.f;
+    Falloff falloff = Falloff::Linear;
+
+    float influenceAt(Vec2f point) const;
+};
+
+// ---------------------------------------------------------------------------
 // Dependency graph and compile cache
 // ---------------------------------------------------------------------------
 
@@ -238,6 +258,17 @@ struct LSContext::Impl {
     void registerOperationDependencies(OperationId id);
     void markDirtyInternal(uint64_t entityId);
     void invalidateCacheFor(uint64_t entityId);
+
+    // --- boundaries -------------------------------------------------------
+    // Memoized: boundaries change rarely and the field costs a few morphology
+    // passes to build.
+    mutable std::map<uint64_t, BoundaryField> boundaryFields;
+    const BoundaryField* boundaryField(BoundaryId id) const;
+
+    // The bounds of what a sprite draws, in its own space: the union of every
+    // region and geometry its operations reference. Independent of transforms,
+    // so Sprite space does not move when the sprite does.
+    Rect2i spriteContentBounds(SpriteId sprite) const;
 
     // --- attachment chain -------------------------------------------------
     // The frame a sprite ends up in: its own transform with every attachment

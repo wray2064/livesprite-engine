@@ -141,16 +141,9 @@ inline uint64_t pixelKey(int32_t x, int32_t y) {
 inline int32_t keyX(uint64_t key) { return static_cast<int32_t>(key >> 32); }
 inline int32_t keyY(uint64_t key) { return static_cast<int32_t>(key & 0xffffffffu); }
 
+// One curve, shared with the boundary query API.
 float applyFalloff(float t, Falloff falloff) {
-    const float clamped = clamp01(t);
-    switch (falloff) {
-        case Falloff::Linear:   return clamped;
-        case Falloff::Smooth:   return clamped * clamped * (3.f - 2.f * clamped);
-        case Falloff::Sharp:    return clamped * clamped;
-        case Falloff::Cosine:   return 0.5f - 0.5f * std::cos(clamped * kPi);
-        case Falloff::Constant: return clamped > 0.f ? 1.f : 0.f;
-    }
-    return clamped;
+    return applyFalloffCurve(t, falloff);
 }
 
 // -------------------------------------------------------------------------
@@ -603,6 +596,8 @@ uint64_t LSContext::Impl::hashProfile(const CompileProfile& profile) const {
     hash = mix(hash, static_cast<uint64_t>(profile.alphaThreshold * 10000.f));
     hash = mix(hash, profile.resolveTransforms ? 1u : 0u);
     hash = mix(hash, profile.engineVersion);
+    hash = mix(hash, static_cast<uint64_t>(static_cast<uint32_t>(profile.exportOrigin.x)));
+    hash = mix(hash, static_cast<uint64_t>(static_cast<uint32_t>(profile.exportOrigin.y)));
     for (char c : profile.samplingPolicyId) {
         hash = mix(hash, static_cast<uint64_t>(static_cast<unsigned char>(c)));
     }
@@ -654,14 +649,21 @@ struct CompileEnv {
 Vec2f spaceOrigin(const CompileEnv& env, CoordinateSpace space, const IntervalSet& coverage) {
     switch (space) {
         case CoordinateSpace::Object: {
+            // Anchored to this shape.
             const Rect2i box = geom::bounds(coverage);
             return { static_cast<float>(box.min.x), static_cast<float>(box.min.y) };
         }
         case CoordinateSpace::Sprite:
+            // Anchored to everything the sprite draws, so two shapes in one
+            // sprite share a lattice.
             return { static_cast<float>(env.spriteBounds.min.x),
                      static_cast<float>(env.spriteBounds.min.y) };
-        case CoordinateSpace::Canvas:
         case CoordinateSpace::Export:
+            // Anchored to the frame being written, which is what keeps a
+            // pattern steady inside a sheet cell rather than across the canvas.
+            return { static_cast<float>(env.profile.exportOrigin.x),
+                     static_cast<float>(env.profile.exportOrigin.y) };
+        case CoordinateSpace::Canvas:
         default:
             return { 0.f, 0.f };
     }
@@ -1146,22 +1148,14 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
 
     // --- deforms: displacement fields -------------------------------------
 
+    // The same field the boundary query API reports, so a soft boundary renders
+    // the falloff it says it has instead of a hard edge.
     auto boundaryInfluence = [&](BoundaryId id, Vec2f point) -> float {
         if (!id.valid()) {
             return 1.f;
         }
-        const BoundaryData* boundary = env.impl->findBoundary(id);
-        if (boundary == nullptr) {
-            return 1.f;
-        }
-        const GeometryData* shape = env.impl->findGeometry(boundary->desc.shape);
-        if (shape == nullptr) {
-            return 1.f;
-        }
-        const IntervalSet coverage = env.impl->rasterizeGeometry(*shape);
-        const Vec2i pixel { static_cast<int32_t>(std::floor(point.x)),
-                            static_cast<int32_t>(std::floor(point.y)) };
-        return geom::contains(coverage, pixel) ? 1.f : 0.f;
+        const BoundaryField* field = env.impl->boundaryField(id);
+        return field == nullptr ? 1.f : field->influenceAt(point);
     };
 
     // Squash and stretch preserve volume: one axis scales by the factor, the
@@ -1181,7 +1175,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             return runMatrix(matrix, squash->targetRegion, SamplingPolicy::Coverage);
         }
         return displaceRaster(source, [&](Vec2f p) {
-            const float influence = applyFalloff(boundaryInfluence(squash->boundary, p), squash->falloff);
+            const float influence = boundaryInfluence(squash->boundary, p);
             const float scaleY = 1.f + (factor - 1.f) * influence;
             const float scaleX = influence > 0.f ? 1.f + (1.f / factor - 1.f) * influence : 1.f;
             return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
@@ -1196,7 +1190,7 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             return runMatrix(matrix, stretch->targetRegion, SamplingPolicy::Coverage);
         }
         return displaceRaster(source, [&](Vec2f p) {
-            const float influence = applyFalloff(boundaryInfluence(stretch->boundary, p), stretch->falloff);
+            const float influence = boundaryInfluence(stretch->boundary, p);
             const float scaleY = 1.f + (factor - 1.f) * influence;
             const float scaleX = influence > 0.f ? 1.f + (1.f / factor - 1.f) * influence : 1.f;
             return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
@@ -1849,8 +1843,13 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
     env.doc = docId;
     env.sprite = spriteId;
     env.palette = impl_->effectivePalette(spriteId);
-    env.spriteBounds = { {0, 0}, { static_cast<int32_t>(resolved.outputWidth),
-                                   static_cast<int32_t>(resolved.outputHeight) } };
+    // Sprite space needs what the sprite draws, not the size of the frame it is
+    // drawn into.
+    env.spriteBounds = impl_->spriteContentBounds(spriteId);
+    if (env.spriteBounds.empty()) {
+        env.spriteBounds = { {0, 0}, { static_cast<int32_t>(resolved.outputWidth),
+                                       static_cast<int32_t>(resolved.outputHeight) } };
+    }
     env.trace = resolved.type == CompileProfileType::Debug ? &result.trace : nullptr;
 
     if (!resolved.samplingPolicyId.empty()) {

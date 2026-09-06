@@ -269,6 +269,131 @@ SpriteId LSContext::Impl::spriteOfLayer(LayerId id) const {
     return layer ? layer->sprite : SpriteId::null();
 }
 
+float applyFalloffCurve(float t, Falloff falloff) {
+    const float clamped = std::max(0.f, std::min(1.f, t));
+    switch (falloff) {
+        case Falloff::Linear:   return clamped;
+        case Falloff::Smooth:   return clamped * clamped * (3.f - 2.f * clamped);
+        case Falloff::Sharp:    return clamped * clamped;
+        case Falloff::Cosine:   return 0.5f - 0.5f * std::cos(clamped * 3.14159265358979323846f);
+        case Falloff::Constant: return clamped > 0.f ? 1.f : 0.f;
+    }
+    return clamped;
+}
+
+float BoundaryField::influenceAt(Vec2f point) const {
+    const Vec2i pixel { static_cast<int32_t>(std::floor(point.x)),
+                        static_cast<int32_t>(std::floor(point.y)) };
+    if (!geom::contains(coverage, pixel)) {
+        return 0.f;
+    }
+    if (width <= 0.f) {
+        return 1.f;   // a hard boundary holds everything inside it equally
+    }
+
+    const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(pixel.x)) << 32) |
+                          static_cast<uint64_t>(static_cast<uint32_t>(pixel.y));
+    auto found = depth.find(key);
+    const float shells = found == depth.end() ? 0.f : static_cast<float>(found->second);
+    return applyFalloffCurve(shells / width, falloff);
+}
+
+const BoundaryField* LSContext::Impl::boundaryField(BoundaryId id) const {
+    auto cached = boundaryFields.find(id.value);
+    if (cached != boundaryFields.end()) {
+        return &cached->second;
+    }
+
+    const BoundaryData* boundary = findBoundary(id);
+    if (boundary == nullptr) {
+        return nullptr;
+    }
+    const GeometryData* shape = findGeometry(boundary->desc.shape);
+    if (shape == nullptr) {
+        return nullptr;
+    }
+
+    BoundaryField field;
+    field.coverage = rasterizeGeometry(*shape);
+    field.width = std::max(0.f, boundary->desc.falloffWidth);
+    field.falloff = boundary->desc.falloff;
+
+    // Peel the shape one shell at a time: a pixel that survives n contractions
+    // sits n pixels in from the edge.
+    const int32_t shells = static_cast<int32_t>(std::ceil(field.width));
+    IntervalSet current = field.coverage;
+    for (int32_t step = 1; step <= shells; ++step) {
+        const IntervalSet next = geom::contract(current, 1.f, true);
+        const IntervalSet peeled = geom::subtractSets(current, next);
+        for (const Interval& interval : peeled.intervals) {
+            for (int32_t x = interval.x0; x < interval.x1; ++x) {
+                const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+                                      static_cast<uint64_t>(static_cast<uint32_t>(interval.y));
+                field.depth[key] = step - 1;
+            }
+        }
+        current = next;
+        if (current.empty()) {
+            break;
+        }
+    }
+    for (const Interval& interval : current.intervals) {
+        for (int32_t x = interval.x0; x < interval.x1; ++x) {
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+                                  static_cast<uint64_t>(static_cast<uint32_t>(interval.y));
+            field.depth[key] = shells;
+        }
+    }
+
+    auto inserted = boundaryFields.emplace(id.value, std::move(field));
+    return &inserted.first->second;
+}
+
+Rect2i LSContext::Impl::spriteContentBounds(SpriteId sprite) const {
+    const SpriteData* data = findSprite(sprite);
+    if (data == nullptr) {
+        return {};
+    }
+
+    bool any = false;
+    Rect2i bounds {};
+    auto include = [&bounds, &any](Rect2i box) {
+        if (box.empty()) {
+            return;
+        }
+        if (!any) {
+            bounds = box;
+            any = true;
+            return;
+        }
+        bounds.min.x = std::min(bounds.min.x, box.min.x);
+        bounds.min.y = std::min(bounds.min.y, box.min.y);
+        bounds.max.x = std::max(bounds.max.x, box.max.x);
+        bounds.max.y = std::max(bounds.max.y, box.max.y);
+    };
+
+    for (LayerId layerId : data->layers) {
+        const LayerData* layer = findLayer(layerId);
+        if (layer == nullptr) {
+            continue;
+        }
+        for (OperationId opId : layer->operations) {
+            const OperationData* operation = findOperation(opId);
+            if (operation == nullptr) {
+                continue;
+            }
+            for (uint64_t dependency : operationDependencies(operation->op)) {
+                if (const RegionData* region = findRegion(RegionId{dependency})) {
+                    include(geom::bounds(region->coverage));
+                } else if (const GeometryData* shape = findGeometry(GeometryId{dependency})) {
+                    include(geom::bounds(rasterizeGeometry(*shape)));
+                }
+            }
+        }
+    }
+    return bounds;
+}
+
 Result<Mat3f> LSContext::Impl::worldTransformOf(SpriteId sprite) const {
     const SpriteData* data = findSprite(sprite);
     if (data == nullptr) {
@@ -520,7 +645,7 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
         if (data == nullptr) {
             continue;
         }
-        auto clonedPivot = createPivot(cloneId, data->position);
+        auto clonedPivot = createPivot(cloneId, PivotDesc{ data->name, data->position });
         if (clonedPivot.ok()) {
             pivotRemap[pivot.value] = clonedPivot.value.value;
         }
@@ -561,10 +686,22 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
 
     if (SpriteData* clone = impl_->findSprite(cloneId)) {
         clone->palette = sourceCopy.palette;
+        clone->transform = sourceCopy.transform;
         auto remapped = pivotRemap.find(sourceCopy.pivot.value);
         if (remapped != pivotRemap.end()) {
             clone->pivot = PivotId{ remapped->second };
         }
+    }
+
+    // A clone of an attached sprite hangs from the same socket, presenting its
+    // own copy of the pivot the original presented.
+    if (sourceCopy.attached) {
+        AttachmentDesc attachment = sourceCopy.attachment;
+        auto remappedPivot = pivotRemap.find(attachment.childPivot.value);
+        attachment.childPivot = remappedPivot != pivotRemap.end()
+            ? PivotId{ remappedPivot->second }
+            : PivotId::null();
+        attachSprite(cloneId, attachment);
     }
 
     return Result<SpriteId>::ok(cloneId);
@@ -574,6 +711,23 @@ VoidResult LSContext::deleteSprite(SpriteId id) {
     SpriteData* data = impl_->findSprite(id);
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
+    }
+
+    // Anything hanging off this sprite comes off first: a child left holding a
+    // socket that no longer exists is a sprite that believes it is attached to
+    // nothing findable.
+    for (SocketId socketId : data->sockets) {
+        auto children = getAttachedSprites(socketId);
+        if (children.fail()) {
+            continue;
+        }
+        for (SpriteId child : children.value) {
+            detachSprite(child);
+        }
+    }
+    // And this sprite comes off whatever it was hanging from.
+    if (data->attached) {
+        detachSprite(id);
     }
 
     const std::vector<LayerId> layers = data->layers;
@@ -2601,6 +2755,14 @@ VoidResult LSContext::removeSocket(SocketId id) {
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
+
+    // Whatever hung from this socket is now unattached rather than orphaned.
+    auto children = getAttachedSprites(id);
+    if (children.ok()) {
+        for (SpriteId child : children.value) {
+            detachSprite(child);
+        }
+    }
     if (SpriteData* sprite = impl_->findSprite(data->sprite)) {
         sprite->sockets.erase(std::remove(sprite->sockets.begin(), sprite->sockets.end(), id),
                               sprite->sockets.end());
@@ -2971,47 +3133,11 @@ Result<GeometryId> LSContext::exportBoundaryShape(BoundaryId id) const {
 }
 
 Result<float> LSContext::getBoundaryInfluence(BoundaryId id, Vec2f point) const {
-    const BoundaryData* data = impl_->findBoundary(id);
-    if (data == nullptr) {
+    const BoundaryField* field = impl_->boundaryField(id);
+    if (field == nullptr) {
         return Result<float>::err(LSError::InvalidId);
     }
-    const GeometryData* shape = impl_->findGeometry(data->desc.shape);
-    if (shape == nullptr) {
-        return Result<float>::err(LSError::InvalidId);
-    }
-
-    const IntervalSet coverage = impl_->rasterizeGeometry(*shape);
-    const Vec2i pixel { static_cast<int32_t>(std::floor(point.x)),
-                        static_cast<int32_t>(std::floor(point.y)) };
-    if (!geom::contains(coverage, pixel)) {
-        return Result<float>::ok(0.f);
-    }
-    if (data->desc.falloffWidth <= 0.f) {
-        return Result<float>::ok(1.f);
-    }
-
-    // Distance to the boundary, measured in expanding shells.
-    const int32_t maxSteps = static_cast<int32_t>(std::ceil(data->desc.falloffWidth));
-    IntervalSet core = coverage;
-    float depth = static_cast<float>(maxSteps);
-    for (int32_t step = 1; step <= maxSteps; ++step) {
-        core = geom::contract(core, 1.f, true);
-        if (!geom::contains(core, pixel)) {
-            depth = static_cast<float>(step - 1);
-            break;
-        }
-    }
-
-    const float t = std::min(1.f, depth / data->desc.falloffWidth);
-    float influence = t;
-    switch (data->desc.falloff) {
-        case Falloff::Linear:   influence = t; break;
-        case Falloff::Smooth:   influence = t * t * (3.f - 2.f * t); break;
-        case Falloff::Sharp:    influence = t * t; break;
-        case Falloff::Cosine:   influence = 0.5f - 0.5f * std::cos(t * 3.14159265358979323846f); break;
-        case Falloff::Constant: influence = 1.f; break;
-    }
-    return Result<float>::ok(influence);
+    return Result<float>::ok(field->influenceAt(point));
 }
 
 // ---------------------------------------------------------------------------

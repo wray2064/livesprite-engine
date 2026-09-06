@@ -394,6 +394,11 @@ struct CompileProfile {
     bool                resolveTransforms  = true;
     uint32_t            engineVersion      = LS_ENGINE_VERSION;
 
+    // Where this output frame sits inside the canvas. Only patterns in Export
+    // space read it: it is what lets a sprite packed into a sheet cell keep its
+    // pattern locked to the cell rather than to the canvas.
+    Vec2i               exportOrigin;
+
     // Optional: type id of a compile policy registered through
     // registerCompilePolicy(). When set, that policy chooses the output colour
     // from the sub-samples a transform gathers, in place of `sampling`.

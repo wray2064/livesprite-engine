@@ -461,6 +461,76 @@ void testAnchorSurvivesSaveLoad() {
     LS_CHECK(after.value.raster.pixels == before.value.raster.pixels);
 }
 
+// All four declared coordinate spaces have to be distinct, or a fill cannot
+// actually choose between them.
+void testCoordinateSpacesAreDistinct() {
+    auto ctx = LSContext::create();
+
+    // Two shapes in one sprite, far apart. Object space anchors each to itself;
+    // Sprite space anchors both to what the sprite draws as a whole.
+    auto build = [&](CoordinateSpace space, Vec2i exportOrigin) {
+        const DocumentId doc = ctx->createDocument({"spaces", 48, 48}).value;
+        const SpriteId sprite = ctx->createSprite(doc).value;
+        const LayerId layer = ctx->createLayer(sprite, {"main"}).value;
+        const RampId ramp = ctx->createRamp(doc,
+            {"two", {{0.f, {20, 20, 20, 255}}, {1.f, {240, 240, 240, 255}}}, true}).value;
+        const PatternId pattern =
+            ctx->createDitherPattern(doc, DitherPatternKind::HorizontalLines).value;
+
+        auto block = [&](Vec2f origin) {
+            const GeometryId rect = ctx->createRect(doc, {origin, 8.f, 8.f, 0.f}).value;
+            const RegionId region = ctx->createRegionFromGeometry(rect).value;
+            FillDitherOp dither;
+            dither.targetRegion = region;
+            dither.ramp = ramp;
+            dither.pattern = pattern;
+            dither.density = 0.5f;
+            dither.coordinateSpace = space;
+            ctx->addOperation(layer, dither);
+        };
+        block({4.f, 5.f});      // the shape that sets the sprite bounds origin
+        block({20.f, 22.f});    // offset by an odd number of rows
+
+        CompileProfile profile = exportProfile(48);
+        profile.exportOrigin = exportOrigin;
+        return ctx->compileSprite(sprite, profile).value.raster;
+    };
+
+    auto sample = [](const RasterBuffer& raster, Vec2i origin) {
+        std::vector<Color> out;
+        for (int32_t y = 0; y < 8; ++y) {
+            for (int32_t x = 0; x < 8; ++x) {
+                out.push_back(readPixel(raster, origin.x + x, origin.y + y));
+            }
+        }
+        return out;
+    };
+
+    // Object space: each shape carries its own copy of the pattern, so both
+    // read identically relative to themselves.
+    const RasterBuffer object = build(CoordinateSpace::Object, {0, 0});
+    LS_CHECK(sample(object, {4, 5}) == sample(object, {20, 22}));
+
+    // Sprite space: one lattice across the whole sprite, so the second shape,
+    // offset by 17 rows, is out of phase with the first.
+    const RasterBuffer spriteSpace = build(CoordinateSpace::Sprite, {0, 0});
+    LS_CHECK(sample(spriteSpace, {4, 5}) != sample(spriteSpace, {20, 22}));
+
+    // Sprite space is anchored to the content, not to the frame: it differs
+    // from Canvas space, whose lattice starts at the canvas origin.
+    const RasterBuffer canvasSpace = build(CoordinateSpace::Canvas, {0, 0});
+    LS_CHECK(sample(spriteSpace, {4, 5}) != sample(canvasSpace, {4, 5}));
+
+    // Export space follows the frame being written, so moving the export origin
+    // re-phases it while Canvas space stays put.
+    const RasterBuffer exportA = build(CoordinateSpace::Export, {0, 0});
+    const RasterBuffer exportB = build(CoordinateSpace::Export, {0, 3});
+    LS_CHECK(sample(exportA, {4, 5}) != sample(exportB, {4, 5}));
+
+    const RasterBuffer canvasShifted = build(CoordinateSpace::Canvas, {0, 3});
+    LS_CHECK(sample(canvasSpace, {4, 5}) == sample(canvasShifted, {4, 5}));
+}
+
 } // namespace
 
 int main() {
@@ -470,5 +540,6 @@ int main() {
     testAnchorModes();
     testAnchorFollowsDeform();
     testAnchorSurvivesSaveLoad();
+    testCoordinateSpacesAreDistinct();
     return lstest::report("dither");
 }
