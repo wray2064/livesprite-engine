@@ -2,6 +2,9 @@
 build/
 out/
 
+# Generated testbed gallery (reproduce with: livesprite_testbed --out testbed)
+testbed/
+
 # MSVC / CMake artifacts
 *.obj
 *.lib

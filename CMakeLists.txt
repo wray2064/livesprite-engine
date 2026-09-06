@@ -29,6 +29,13 @@ else()
     target_compile_options(livesprite PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+option(LS_BUILD_TESTBED "Build the engine testbed gallery tool" ON)
+if (LS_BUILD_TESTBED)
+    add_executable(livesprite_testbed tools/ls_testbed.cpp)
+    target_link_libraries(livesprite_testbed PRIVATE livesprite)
+    target_include_directories(livesprite_testbed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+endif()
+
 option(LS_BUILD_TESTS "Build engine tests" ON)
 if (LS_BUILD_TESTS)
     enable_testing()

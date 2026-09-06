@@ -1000,9 +1000,22 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
         return geom::contains(coverage, pixel) ? 1.f : 0.f;
     };
 
+    // Squash and stretch preserve volume: one axis scales by the factor, the
+    // other by its reciprocal. With no boundary limiting them they are a plain
+    // affine transform, so they take the matrix path, which resolves coverage
+    // geometrically instead of forward-scattering pixels and tearing gaps.
+    auto volumeScale = [](float factor) {
+        const float safe = std::max(0.01f, factor);
+        return Vec2f{ 1.f / safe, safe };
+    };
+
     if (const auto* squash = std::get_if<SquashOp>(&op)) {
         const Vec2f pivot = pivotOf(squash->pivot, squash->pivotFallback);
         const float factor = std::max(0.01f, squash->factor);
+        if (!squash->boundary.valid()) {
+            const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(volumeScale(factor)), pivot);
+            return runMatrix(matrix, squash->targetRegion, SamplingPolicy::Coverage);
+        }
         return displaceRaster(source, [&](Vec2f p) {
             const float influence = applyFalloff(boundaryInfluence(squash->boundary, p), squash->falloff);
             const float scaleY = 1.f + (factor - 1.f) * influence;
@@ -1014,6 +1027,10 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     if (const auto* stretch = std::get_if<StretchOp>(&op)) {
         const Vec2f pivot = pivotOf(stretch->pivot, stretch->pivotFallback);
         const float factor = std::max(0.01f, stretch->factor);
+        if (!stretch->boundary.valid()) {
+            const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(volumeScale(factor)), pivot);
+            return runMatrix(matrix, stretch->targetRegion, SamplingPolicy::Coverage);
+        }
         return displaceRaster(source, [&](Vec2f p) {
             const float influence = applyFalloff(boundaryInfluence(stretch->boundary, p), stretch->falloff);
             const float scaleY = 1.f + (factor - 1.f) * influence;
