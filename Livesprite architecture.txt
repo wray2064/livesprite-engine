@@ -199,7 +199,10 @@ taper
 pattern
 palette role
 snap policy
-coverage policy
+
+Strokes rasterize the way regions do: a pixel is marked when its centre falls
+inside the stroke geometry. Snap policy is what aligns a stroke to the grid, so
+there is no separate coverage policy for strokes.
 
 Even the pencil tool can be app-side UI that emits stroke/path operations.
 

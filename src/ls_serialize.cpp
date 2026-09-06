@@ -573,7 +573,10 @@ json::Value writeSprite(const LSContext::Impl& impl, SpriteId spriteId, const Sp
         }
         json::Value groupObj = json::Value::object();
         groupObj["id"] = enc(groupId);
-        groupObj["name"] = enc(data->name);
+        groupObj["name"] = enc(data->desc.name);
+        groupObj["opacity"] = enc(data->desc.opacity);
+        groupObj["blend"] = enc(data->desc.blend);
+        groupObj["visible"] = enc(data->desc.visible);
         groupObj["layers"] = enc(data->layers);
         groups.push(std::move(groupObj));
     }
@@ -1121,7 +1124,10 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
                     group.sprite = SpriteId{spriteId};
                     std::set<std::string> groupConsumed {"id"};
                     Reader reader{&item, ctx, &groupConsumed};
-                    reader.field("name", group.name);
+                    reader.field("name", group.desc.name);
+                    reader.field("opacity", group.desc.opacity);
+                    reader.field("blend", group.desc.blend);
+                    reader.field("visible", group.desc.visible);
                     reader.field("layers", group.layers);
                     impl.groups.emplace(id, std::move(group));
                     sprite.groups.push_back(GroupId{id});

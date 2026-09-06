@@ -798,18 +798,76 @@ VoidResult LSContext::deleteLayer(LayerId id) {
     return VoidResult::success();
 }
 
-Result<GroupId> LSContext::createGroup(SpriteId sprite, std::string_view name) {
+Result<GroupId> LSContext::createGroup(SpriteId sprite, const GroupDesc& desc) {
     SpriteData* data = impl_->findSprite(sprite);
     if (data == nullptr) {
         return Result<GroupId>::err(LSError::InvalidId);
     }
+    if (desc.opacity < 0.f || desc.opacity > 1.f) {
+        return Result<GroupId>::err(LSError::InvalidParameter);
+    }
     const GroupId id = impl_->mint<GroupId>();
     GroupData group;
     group.sprite = sprite;
-    group.name = std::string(name);
+    group.desc = desc;
     impl_->groups.emplace(id.value, std::move(group));
     data->groups.push_back(id);
+    impl_->markDirtyInternal(sprite.value);
     return Result<GroupId>::ok(id);
+}
+
+Result<GroupId> LSContext::createGroup(SpriteId sprite, std::string_view name) {
+    GroupDesc desc;
+    desc.name = std::string(name);
+    return createGroup(sprite, desc);
+}
+
+VoidResult LSContext::setGroupOpacity(GroupId id, float opacity) {
+    GroupData* data = impl_->findGroup(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (opacity < 0.f || opacity > 1.f) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    data->desc.opacity = opacity;
+    impl_->markDirtyInternal(data->sprite.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::setGroupBlendMode(GroupId id, BlendMode mode) {
+    GroupData* data = impl_->findGroup(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->desc.blend = mode;
+    impl_->markDirtyInternal(data->sprite.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::setGroupVisibility(GroupId id, bool visible) {
+    GroupData* data = impl_->findGroup(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->desc.visible = visible;
+    impl_->markDirtyInternal(data->sprite.value);
+    return VoidResult::success();
+}
+
+Result<GroupInfo> LSContext::getGroupInfo(GroupId id) const {
+    const GroupData* data = impl_->findGroup(id);
+    if (data == nullptr) {
+        return Result<GroupInfo>::err(LSError::InvalidId);
+    }
+    GroupInfo info;
+    info.id = id;
+    info.name = data->desc.name;
+    info.opacity = data->desc.opacity;
+    info.blend = data->desc.blend;
+    info.visible = data->desc.visible;
+    info.layers = data->layers;
+    return Result<GroupInfo>::ok(info);
 }
 
 VoidResult LSContext::deleteGroup(GroupId id) {
@@ -1468,8 +1526,10 @@ Result<std::vector<LayerId>> LSContext::flattenLayersForCompile(SpriteId sprite)
             continue;
         }
         if (layerData->parent.valid()) {
-            // A layer inside a group is only composited if the group still exists.
-            if (impl_->findGroup(layerData->parent) == nullptr) {
+            // A layer inside a group composites only if the group still exists
+            // and is itself visible.
+            const GroupData* group = impl_->findGroup(layerData->parent);
+            if (group == nullptr || !group->desc.visible) {
                 continue;
             }
         }

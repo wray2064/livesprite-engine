@@ -69,6 +69,10 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_instruction_tests PRIVATE livesprite)
     add_test(NAME livesprite_instruction COMMAND livesprite_instruction_tests)
 
+    add_executable(livesprite_render_tests tests/render_tests.cpp)
+    target_link_libraries(livesprite_render_tests PRIVATE livesprite)
+    add_test(NAME livesprite_render COMMAND livesprite_render_tests)
+
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)
     add_test(NAME livesprite_plugin COMMAND livesprite_plugin_tests)

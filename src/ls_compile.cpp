@@ -306,6 +306,26 @@ RasterBuffer cleanupTransformed(const RasterBuffer& raster,
     return cleaned;
 }
 
+// Where a transform lands on the pixel grid. Without this a rotation about a
+// fractional pivot lands the content half a pixel off, which is exactly the
+// smear a pixel artist does not want.
+Mat3f applyRounding(const Mat3f& matrix, RoundingPolicy rounding) {
+    Mat3f out = matrix;
+    auto quantize = [rounding](float value) {
+        switch (rounding) {
+            case RoundingPolicy::Nearest:      return std::round(value);
+            case RoundingPolicy::Floor:        return std::floor(value);
+            case RoundingPolicy::Ceil:         return std::ceil(value);
+            case RoundingPolicy::Truncate:     return std::trunc(value);
+            case RoundingPolicy::SubpixelHalf: return std::round(value * 2.f) * 0.5f;
+        }
+        return value;
+    };
+    out.m[2] = quantize(out.m[2]);
+    out.m[5] = quantize(out.m[5]);
+    return out;
+}
+
 bool isIdentityTransform(const Mat3f& matrix) {
     static const Mat3f identity;
     for (int i = 0; i < 9; ++i) {
@@ -424,7 +444,7 @@ RasterBuffer transformRaster(const RasterBuffer& source, const Mat3f& matrix,
                         firstHit = color;
                     }
                     ++hits;
-                    if (policy) {
+                    if (policy || sampling == SamplingPolicy::Median) {
                         samples.push_back(color);
                     }
                     sumR += static_cast<float>(color.r);
@@ -466,9 +486,24 @@ RasterBuffer transformRaster(const RasterBuffer& source, const Mat3f& matrix,
             Color chosen = firstHit;
             switch (sampling) {
                 case SamplingPolicy::Majority:
-                case SamplingPolicy::Median:
                     chosen = majority;
                     break;
+                case SamplingPolicy::Median: {
+                    // The middle sample by luminance: unlike majority it cannot
+                    // be swayed by one colour appearing twice at an edge.
+                    std::vector<std::pair<float, Color>> ranked;
+                    ranked.reserve(samples.size());
+                    for (Color sample : samples) {
+                        ranked.emplace_back(0.299f * static_cast<float>(sample.r) +
+                                            0.587f * static_cast<float>(sample.g) +
+                                            0.114f * static_cast<float>(sample.b), sample);
+                    }
+                    std::sort(ranked.begin(), ranked.end(),
+                              [](const std::pair<float, Color>& a,
+                                 const std::pair<float, Color>& b) { return a.first < b.first; });
+                    chosen = ranked.empty() ? firstHit : ranked[ranked.size() / 2].second;
+                    break;
+                }
                 case SamplingPolicy::Average:
                     chosen = { toByte(sumR / static_cast<float>(hits) / 255.f),
                                toByte(sumG / static_cast<float>(hits) / 255.f),
@@ -891,14 +926,51 @@ void compositeMark(RasterBuffer& target, const Mark& mark) {
 
 // --- stroke rasterization -------------------------------------------------
 
-IntervalSet strokePath(const std::vector<Vec2f>& points, bool closed, float width,
-                       StrokeCap cap, float taper) {
+// Snap a path to the pixel grid before it is stroked. Grid puts vertices on
+// pixel corners, HalfGrid on pixel centres, which is what keeps an authored
+// one-pixel line from straddling two columns.
+std::vector<Vec2f> snapPath(const std::vector<Vec2f>& points, SnapPolicy snap) {
+    if (snap == SnapPolicy::None) {
+        return points;
+    }
+    std::vector<Vec2f> snapped;
+    snapped.reserve(points.size());
+    for (Vec2f point : points) {
+        if (snap == SnapPolicy::Grid) {
+            snapped.push_back({ std::round(point.x), std::round(point.y) });
+        } else {
+            snapped.push_back({ std::floor(point.x) + 0.5f, std::floor(point.y) + 0.5f });
+        }
+    }
+    return snapped;
+}
+
+Vec2f normalOf(Vec2f from, Vec2f to) {
+    const float dx = to.x - from.x;
+    const float dy = to.y - from.y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if (length < 1e-6f) {
+        return { 0.f, 0.f };
+    }
+    return { -dy / length, dx / length };
+}
+
+// A stroke is the union of one quad per segment, a join shape at every interior
+// vertex, and a cap at each open end. Built as geometry rather than as a
+// distance field, because miter and bevel joins have no meaning in a field.
+IntervalSet strokePath(const std::vector<Vec2f>& rawPoints, bool closed, float width,
+                       StrokeCap cap, StrokeJoin join, float miterLimit, float taper,
+                       SnapPolicy snap) {
     IntervalSet out;
-    if (points.empty() || width <= 0.f) {
+    if (rawPoints.empty() || width <= 0.f) {
         return out;
     }
+
+    const std::vector<Vec2f> points = snapPath(rawPoints, snap);
     if (points.size() == 1) {
-        return geom::rasterizePoint({ points.front() });
+        return cap == StrokeCap::Round
+            ? geom::rasterizeCircle({ points.front(), std::max(0.5f, width * 0.5f) })
+            : geom::rasterizePoint({ points.front() });
     }
 
     std::vector<std::pair<Vec2f, Vec2f>> segments;
@@ -908,78 +980,131 @@ IntervalSet strokePath(const std::vector<Vec2f>& points, bool closed, float widt
     if (closed && points.size() > 2) {
         segments.emplace_back(points.back(), points.front());
     }
+    if (segments.empty()) {
+        return out;
+    }
 
     float totalLength = 0.f;
+    std::vector<float> segmentStart;
     for (const auto& [a, b] : segments) {
+        segmentStart.push_back(totalLength);
         totalLength += std::sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
     }
     if (totalLength <= 0.f) {
         totalLength = 1.f;
     }
 
-    Rect2f box { points.front(), points.front() };
-    for (const Vec2f& p : points) {
-        box.min.x = std::min(box.min.x, p.x);
-        box.min.y = std::min(box.min.y, p.y);
-        box.max.x = std::max(box.max.x, p.x);
-        box.max.y = std::max(box.max.y, p.y);
+    auto halfWidthAt = [&](float distance) {
+        const float along = clamp01(distance / totalLength);
+        return std::max(0.5f, width * (1.f - taper * along) * 0.5f);
+    };
+
+    // One quad per segment.
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const Vec2f a = segments[i].first;
+        const Vec2f b = segments[i].second;
+        const Vec2f normal = normalOf(a, b);
+        if (normal.x == 0.f && normal.y == 0.f) {
+            continue;
+        }
+        const float startWidth = halfWidthAt(segmentStart[i]);
+        const float endWidth = halfWidthAt(i + 1 < segmentStart.size() ? segmentStart[i + 1]
+                                                                      : totalLength);
+        PolygonDesc quad;
+        quad.vertices = {
+            { a.x + normal.x * startWidth, a.y + normal.y * startWidth },
+            { b.x + normal.x * endWidth,   b.y + normal.y * endWidth },
+            { b.x - normal.x * endWidth,   b.y - normal.y * endWidth },
+            { a.x - normal.x * startWidth, a.y - normal.y * startWidth }
+        };
+        out = geom::unionSets(out, geom::rasterizePolygon(quad));
     }
-    const float margin = width + 2.f;
-    const int32_t x0 = static_cast<int32_t>(std::floor(box.min.x - margin));
-    const int32_t x1 = static_cast<int32_t>(std::ceil(box.max.x + margin));
-    const int32_t y0 = static_cast<int32_t>(std::floor(box.min.y - margin));
-    const int32_t y1 = static_cast<int32_t>(std::ceil(box.max.y + margin));
 
-    const bool squareCap = cap == StrokeCap::Square || cap == StrokeCap::Flat;
+    // Joins at the vertices where two segments meet.
+    const size_t jointCount = closed ? segments.size() : segments.size() - 1;
+    for (size_t i = 0; i < jointCount; ++i) {
+        const auto& first = segments[i];
+        const auto& second = segments[(i + 1) % segments.size()];
+        const Vec2f vertex = first.second;
+        const Vec2f inNormal = normalOf(first.first, first.second);
+        const Vec2f outNormal = normalOf(second.first, second.second);
+        if ((inNormal.x == 0.f && inNormal.y == 0.f) ||
+            (outNormal.x == 0.f && outNormal.y == 0.f)) {
+            continue;
+        }
+        const float half = halfWidthAt(segmentStart[(i + 1) % segments.size()]);
 
-    for (int32_t y = y0; y < y1; ++y) {
-        for (int32_t x = x0; x < x1; ++x) {
-            const Vec2f p { static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f };
-            bool inside = false;
-            float travelled = 0.f;
+        if (join == StrokeJoin::Round) {
+            out = geom::unionSets(out, geom::rasterizeCircle({ vertex, half }));
+            continue;
+        }
 
-            for (const auto& [a, b] : segments) {
-                const float dx = b.x - a.x;
-                const float dy = b.y - a.y;
-                const float lengthSq = dx * dx + dy * dy;
-                const float segmentLength = std::sqrt(lengthSq);
-                float t = lengthSq > 0.f ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq : 0.f;
-                const bool beyondEnds = t < 0.f || t > 1.f;
-                t = clamp01(t);
-                const float projX = a.x + t * dx;
-                const float projY = a.y + t * dy;
-                const float distance = std::sqrt((p.x - projX) * (p.x - projX) +
-                                                 (p.y - projY) * (p.y - projY));
+        // Which side is the outside of the turn.
+        const float turn = inNormal.x * outNormal.y - inNormal.y * outNormal.x;
+        const float side = turn >= 0.f ? -1.f : 1.f;
+        const Vec2f edgeIn { vertex.x + inNormal.x * half * side,
+                             vertex.y + inNormal.y * half * side };
+        const Vec2f edgeOut { vertex.x + outNormal.x * half * side,
+                              vertex.y + outNormal.y * half * side };
 
-                const float along = (travelled + t * segmentLength) / totalLength;
-                const float localWidth = width * (1.f - taper * along);
-                const float radius = std::max(0.5f, localWidth * 0.5f);
+        PolygonDesc bevel;
+        bevel.vertices = { vertex, edgeIn, edgeOut };
 
-                // Flat and square caps stop at the segment end unless the join
-                // with the next segment covers it; round caps extend past it.
-                if (beyondEnds && squareCap && !closed) {
-                    const bool interiorJoint = (&a != &segments.front().first) ||
-                                               (&b != &segments.back().second);
-                    if (!interiorJoint && distance > radius) {
-                        travelled += segmentLength;
-                        continue;
-                    }
+        if (join == StrokeJoin::Miter) {
+            // The miter point sits along the bisector; how far out depends on
+            // how sharp the turn is, and miterLimit caps it.
+            Vec2f bisector { inNormal.x + outNormal.x, inNormal.y + outNormal.y };
+            const float length = std::sqrt(bisector.x * bisector.x + bisector.y * bisector.y);
+            if (length > 1e-4f) {
+                bisector = { bisector.x / length, bisector.y / length };
+                const float cosHalf = std::max(0.05f, length * 0.5f);
+                const float miterLength = half / cosHalf;
+                if (miterLength <= std::max(1.f, miterLimit) * half) {
+                    PolygonDesc miter;
+                    miter.vertices = { vertex, edgeIn,
+                                       { vertex.x + bisector.x * miterLength * side,
+                                         vertex.y + bisector.y * miterLength * side },
+                                       edgeOut };
+                    out = geom::unionSets(out, geom::rasterizePolygon(miter));
+                    continue;
                 }
-
-                if (distance <= radius) {
-                    inside = true;
-                    break;
-                }
-                travelled += segmentLength;
             }
+        }
 
-            if (inside) {
-                out.intervals.push_back({ y, x, x + 1 });
+        out = geom::unionSets(out, geom::rasterizePolygon(bevel));
+    }
+
+    // Caps on the open ends.
+    if (!closed && cap != StrokeCap::Flat) {
+        struct End { Vec2f point; Vec2f direction; float half; };
+        const Vec2f startDirection = normalOf(segments.front().first, segments.front().second);
+        const Vec2f endDirection = normalOf(segments.back().first, segments.back().second);
+        const End ends[2] = {
+            { segments.front().first, { -startDirection.y, startDirection.x }, halfWidthAt(0.f) },
+            { segments.back().second, { endDirection.y, -endDirection.x }, halfWidthAt(totalLength) }
+        };
+
+        for (const End& end : ends) {
+            if (cap == StrokeCap::Round) {
+                out = geom::unionSets(out, geom::rasterizeCircle({ end.point, end.half }));
+                continue;
             }
+            // Square: carry the stroke half a width past the end.
+            const Vec2f normal { -end.direction.y, end.direction.x };
+            PolygonDesc square;
+            square.vertices = {
+                { end.point.x + normal.x * end.half, end.point.y + normal.y * end.half },
+                { end.point.x + normal.x * end.half + end.direction.x * end.half,
+                  end.point.y + normal.y * end.half + end.direction.y * end.half },
+                { end.point.x - normal.x * end.half + end.direction.x * end.half,
+                  end.point.y - normal.y * end.half + end.direction.y * end.half },
+                { end.point.x - normal.x * end.half, end.point.y - normal.y * end.half }
+            };
+            out = geom::unionSets(out, geom::rasterizePolygon(square));
         }
     }
 
-    return geom::normalize(std::move(out));
+    return out;
 }
 
 IntervalSet outlineOf(const IntervalSet& coverage, float thickness, OutlineSide side,
@@ -1092,7 +1217,9 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
         return isolated;
     };
 
-    auto runMatrix = [&](const Mat3f& matrix, RegionId targetRegion, SamplingPolicy sampling) {
+    auto runMatrix = [&](const Mat3f& rawMatrix, RegionId targetRegion, SamplingPolicy sampling,
+                         RoundingPolicy rounding = RoundingPolicy::SubpixelHalf) {
+        const Mat3f matrix = applyRounding(rawMatrix, rounding);
         if (trackedPoints != nullptr) {
             for (Vec2f& point : *trackedPoints) {
                 point = matrix.transformPoint(point);
@@ -1106,20 +1233,18 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
 
     if (const auto* translate = std::get_if<TranslateOp>(&op)) {
         Vec2f delta = translate->delta;
-        if (translate->rounding != RoundingPolicy::SubpixelHalf) {
-            delta = { std::round(delta.x), std::round(delta.y) };
-        }
-        return runMatrix(Mat3f::translation(delta), translate->targetRegion, SamplingPolicy::Center);
+        return runMatrix(Mat3f::translation(delta), translate->targetRegion,
+                         SamplingPolicy::Center, translate->rounding);
     }
     if (const auto* rotate = std::get_if<RotateOp>(&op)) {
         const Vec2f pivot = pivotOf(rotate->pivot, rotate->pivotFallback);
         const Mat3f matrix = Mat3f::aroundPivot(Mat3f::rotation(rotate->angleDegrees), pivot);
-        return runMatrix(matrix, rotate->targetRegion, rotate->sampling);
+        return runMatrix(matrix, rotate->targetRegion, rotate->sampling, rotate->rounding);
     }
     if (const auto* scale = std::get_if<ScaleOp>(&op)) {
         const Vec2f pivot = pivotOf(scale->pivot, scale->pivotFallback);
         const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(scale->factor), pivot);
-        return runMatrix(matrix, scale->targetRegion, scale->sampling);
+        return runMatrix(matrix, scale->targetRegion, scale->sampling, scale->rounding);
     }
     if (const auto* mirror = std::get_if<MirrorOp>(&op)) {
         const Vec2f pivot = pivotOf(mirror->pivot, mirror->pivotFallback);
@@ -1143,7 +1268,8 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
         return runMatrix(matrix, skew->targetRegion, skew->sampling);
     }
     if (const auto* matrixOp = std::get_if<MatrixTransformOp>(&op)) {
-        return runMatrix(matrixOp->matrix, matrixOp->targetRegion, matrixOp->sampling);
+        return runMatrix(matrixOp->matrix, matrixOp->targetRegion, matrixOp->sampling,
+                         matrixOp->rounding);
     }
 
     // --- deforms: displacement fields -------------------------------------
@@ -1614,7 +1740,28 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             closed = polyline->closed;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = strokePath(points, closed, stroke->width, stroke->cap, stroke->taper);
+        out.coverage = strokePath(points, closed, stroke->width, stroke->cap, stroke->join,
+                                  stroke->miterLimit, stroke->taper, stroke->snap);
+
+        // A stroke pattern thins the mark along its own length: the tile is a
+        // threshold screen, so the same tile that dithers a fill dashes a line.
+        if (const PatternData* pattern = env.impl->findPattern(stroke->strokePattern)) {
+            const Rect2i box = geom::bounds(out.coverage);
+            const Vec2f origin { static_cast<float>(box.min.x), static_cast<float>(box.min.y) };
+            IntervalSet kept;
+            for (const Interval& interval : out.coverage.intervals) {
+                for (int32_t x = interval.x0; x < interval.x1; ++x) {
+                    const PatternSample sample = samplePattern(
+                        pattern, static_cast<float>(x) + 0.5f,
+                        static_cast<float>(interval.y) + 0.5f, origin, 0.f);
+                    if (sample.threshold < 0.5f) {
+                        kept.intervals.push_back({ interval.y, x, x + 1 });
+                    }
+                }
+            }
+            out.coverage = geom::normalize(std::move(kept));
+        }
+
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;
@@ -1631,7 +1778,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             closed = curve->closed;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = strokePath(points, closed, stroke->width, stroke->cap, stroke->taper);
+        out.coverage = strokePath(points, closed, stroke->width, stroke->cap, stroke->join,
+                                  stroke->miterLimit, stroke->taper, SnapPolicy::None);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;
@@ -1698,8 +1846,31 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
                     center.x += offsetX * stroke->scatter;
                     center.y += offsetY * stroke->scatter;
                 }
-                coverage = geom::unionSets(coverage,
-                    geom::rasterizeCircle({ center, std::max(0.5f, stroke->size * 0.5f) }));
+                const float radius = std::max(0.5f, stroke->size * 0.5f);
+                if (const PatternData* brush = env.impl->findPattern(stroke->brushPattern)) {
+                    // The tile is the stamp: cells below the halfway threshold
+                    // are the bristles.
+                    const int32_t reach = static_cast<int32_t>(std::ceil(radius));
+                    const float step = stroke->size /
+                        static_cast<float>(std::max<uint32_t>(1, brush->desc.tileWidth));
+                    IntervalSet stamp;
+                    for (int32_t stampY = -reach; stampY <= reach; ++stampY) {
+                        for (int32_t stampX = -reach; stampX <= reach; ++stampX) {
+                            const PatternSample sample = samplePattern(
+                                brush, static_cast<float>(stampX) + radius,
+                                static_cast<float>(stampY) + radius, {0.f, 0.f}, 0.f,
+                                { std::max(0.01f, step), std::max(0.01f, step) });
+                            if (sample.threshold < 0.5f) {
+                                const int32_t px = static_cast<int32_t>(std::floor(center.x)) + stampX;
+                                const int32_t py = static_cast<int32_t>(std::floor(center.y)) + stampY;
+                                stamp.intervals.push_back({ py, px, px + 1 });
+                            }
+                        }
+                    }
+                    coverage = geom::unionSets(coverage, geom::normalize(std::move(stamp)));
+                } else {
+                    coverage = geom::unionSets(coverage, geom::rasterizeCircle({ center, radius }));
+                }
                 ++stampIndex;
             }
             carry = length > 0.f ? std::fmod(spacing - std::fmod(length - carry, spacing), spacing) : carry;
@@ -2292,6 +2463,39 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         return Result<CompileResult>::err(order.error);
     }
 
+    // Layers inside a group composite into the group buffer first, so the group
+    // opacity and blend apply to the group as a whole rather than to each layer
+    // in turn. The buffer is flushed when the run of layers belonging to that
+    // group ends, which keeps the order the sprite declares.
+    GroupId openGroup;
+    RasterBuffer groupBuffer;
+
+    auto flushGroup = [&]() {
+        if (!openGroup.valid()) {
+            return;
+        }
+        const GroupData* group = impl_->findGroup(openGroup);
+        if (group != nullptr) {
+            for (int32_t y = 0; y < static_cast<int32_t>(result.raster.height); ++y) {
+                for (int32_t x = 0; x < static_cast<int32_t>(result.raster.width); ++x) {
+                    const Color source = getRasterPixel(groupBuffer, x, y);
+                    if (source.a == 0) {
+                        continue;
+                    }
+                    setRasterPixel(result.raster, x, y,
+                                   blendPixel(getRasterPixel(result.raster, x, y), source,
+                                              group->desc.blend, group->desc.opacity));
+                }
+            }
+            if (debug) {
+                result.trace.push_back("composited group " + std::to_string(openGroup.value) +
+                                       " (" + group->desc.name + ")");
+            }
+        }
+        openGroup = GroupId::null();
+        groupBuffer = RasterBuffer{};
+    };
+
     for (LayerId layerId : order.value) {
         auto compiled = compileLayer(layerId, resolved);
         if (compiled.fail()) {
@@ -2301,6 +2505,21 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         if (layer == nullptr) {
             continue;
         }
+
+        const GroupId layerGroup = impl_->findGroup(layer->parent) != nullptr ? layer->parent
+                                                                             : GroupId::null();
+        if (layerGroup != openGroup) {
+            flushGroup();
+            if (layerGroup.valid()) {
+                auto allocatedGroup = allocateRaster(resolved.outputWidth, resolved.outputHeight);
+                if (allocatedGroup.fail()) {
+                    return Result<CompileResult>::err(allocatedGroup.error);
+                }
+                groupBuffer = std::move(allocatedGroup.value);
+                openGroup = layerGroup;
+            }
+        }
+        RasterBuffer& target = openGroup.valid() ? groupBuffer : result.raster;
 
         // A clipping layer only paints where its base layer already has pixels.
         RasterBuffer clipMask;
@@ -2322,8 +2541,8 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
                 if (hasClip && getRasterPixel(clipMask, x, y).a == 0) {
                     continue;
                 }
-                setRasterPixel(result.raster, x, y,
-                               blendPixel(getRasterPixel(result.raster, x, y), source,
+                setRasterPixel(target, x, y,
+                               blendPixel(getRasterPixel(target, x, y), source,
                                           layer->desc.blend, layer->desc.opacity));
             }
         }
@@ -2335,6 +2554,8 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
                                    " (" + layer->desc.name + ")");
         }
     }
+
+    flushGroup();
 
     // The sprite own placement: a sprite moved or turned through
     // setSpriteTransform compiles where it was put.

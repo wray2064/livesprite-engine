@@ -53,7 +53,7 @@ struct LayerData {
 
 struct GroupData {
     SpriteId             sprite;
-    std::string          name;
+    GroupDesc            desc;
     std::vector<LayerId> layers;
 };
 

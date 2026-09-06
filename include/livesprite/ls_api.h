@@ -143,6 +143,25 @@ struct BoundaryDesc {
 // Query results
 // ---------------------------------------------------------------------------
 
+// A group composites its layers into one buffer, then that buffer into the
+// sprite. Its opacity and blend apply to the group as a whole, which is not the
+// same picture as applying them to each layer in turn.
+struct GroupDesc {
+    std::string name;
+    float       opacity = 1.f;
+    BlendMode   blend   = BlendMode::Normal;
+    bool        visible = true;
+};
+
+struct GroupInfo {
+    GroupId              id;
+    std::string          name;
+    float                opacity = 1.f;
+    BlendMode            blend   = BlendMode::Normal;
+    bool                 visible = true;
+    std::vector<LayerId> layers;
+};
+
 struct LayerInfo {
     LayerId     id;
     std::string name;
@@ -323,7 +342,12 @@ public:
     VoidResult          deleteLayer(LayerId id);
 
     Result<GroupId>     createGroup(SpriteId sprite, std::string_view name);
+    Result<GroupId>     createGroup(SpriteId sprite, const GroupDesc& desc);
     VoidResult          deleteGroup(GroupId id);
+    VoidResult          setGroupOpacity(GroupId id, float opacity);
+    VoidResult          setGroupBlendMode(GroupId id, BlendMode mode);
+    VoidResult          setGroupVisibility(GroupId id, bool visible);
+    Result<GroupInfo>   getGroupInfo(GroupId id) const;
     VoidResult          addLayerToGroup(GroupId group, LayerId layer);
     VoidResult          removeLayerFromGroup(GroupId group, LayerId layer);
 
