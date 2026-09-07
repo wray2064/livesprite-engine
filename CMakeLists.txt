@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(livesprite_engine VERSION 0.1.0 LANGUAGES CXX)
+# C is enabled so the C ABI can be tested by a C compiler rather than by C++
+# pretending to be one. A header that only compiles as C++ is not a C header.
+project(livesprite_engine VERSION 0.1.0 LANGUAGES CXX C)
 
 # When LiveSprite is pulled into another project with add_subdirectory or
 # FetchContent, that project wants the library and nothing else: not our tests,
@@ -19,7 +21,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(livesprite STATIC
+set(LS_SOURCES
     src/ls_geometry.cpp
     src/ls_context.cpp
     src/ls_dependency.cpp
@@ -28,7 +30,10 @@ add_library(livesprite STATIC
     src/ls_instructions.cpp
     src/ls_json.cpp
     src/ls_package.cpp
+    src/ls_c_api.cpp
 )
+
+add_library(livesprite STATIC ${LS_SOURCES})
 
 target_include_directories(livesprite
     PUBLIC
@@ -57,6 +62,50 @@ endif()
 # Consumers write livesprite::livesprite whether they found an installed
 # package or pulled the source in directly, so the two paths are interchangeable.
 add_library(livesprite::livesprite ALIAS livesprite)
+
+# The C ABI as a loadable shared library.
+#
+# The static library above is for C++ apps compiled alongside the engine. It is
+# useless to Python, C#, Node or anything else that loads a library at runtime,
+# and that is what this target is for: the same engine, exporting only the
+# stable C surface, in a file a foreign function interface can open.
+#
+# Off by default because most builds here are the C++ one, and a shared library
+# nobody loads is just a slower build.
+option(LS_BUILD_SHARED_C "Build the C ABI as a shared library for language bindings" OFF)
+
+if (LS_BUILD_SHARED_C)
+    add_library(livesprite_c SHARED ${LS_SOURCES})
+    add_library(livesprite::c ALIAS livesprite_c)
+
+    target_include_directories(livesprite_c
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+    # LS_C_SHARED switches the header to dllimport/visibility attributes;
+    # LS_C_BUILDING says this translation unit is the one exporting them.
+    target_compile_definitions(livesprite_c PUBLIC LS_C_SHARED)
+    target_compile_definitions(livesprite_c PRIVATE LS_C_BUILDING)
+
+    # Everything except the C entry points stays hidden, so the C++ symbols are
+    # not part of what a binding can accidentally reach for. The name stays
+    # livesprite_c: a binding loads livesprite_c.dll / liblivesprite_c.so, and
+    # it must not collide with the static library's import lib.
+    set_target_properties(livesprite_c PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+        POSITION_INDEPENDENT_CODE ON)
+
+    if (MSVC)
+        target_compile_options(livesprite_c PRIVATE /W4 /WX /GR- /fp:precise)
+    else()
+        target_compile_options(livesprite_c PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -fno-rtti -ffp-contract=off)
+    endif()
+endif()
 
 option(LS_BUILD_TESTBED "Build the engine testbed gallery tool" ${LS_TOP_LEVEL})
 if (LS_BUILD_TESTBED)
@@ -123,6 +172,17 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_determinism_tests PRIVATE livesprite)
     target_include_directories(livesprite_determinism_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME livesprite_determinism COMMAND livesprite_determinism_tests)
+
+    # Compiled as C, on purpose: see the comment at the top of the file.
+    add_executable(livesprite_c_api_tests tests/c_api_tests.c)
+    target_link_libraries(livesprite_c_api_tests PRIVATE livesprite)
+    set_target_properties(livesprite_c_api_tests PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+    if (MSVC)
+        target_compile_options(livesprite_c_api_tests PRIVATE /W4 /WX)
+    else()
+        target_compile_options(livesprite_c_api_tests PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME livesprite_c_api COMMAND livesprite_c_api_tests)
 
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)

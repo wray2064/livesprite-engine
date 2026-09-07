@@ -92,48 +92,25 @@ std::string_view operationTypeName(const Operation& op) {
     return std::visit([](const auto& concrete) -> std::string_view {
         using Op = std::decay_t<decltype(concrete)>;
 #define LS_OP_NAME(T) if constexpr (std::is_same_v<Op, T>) { return #T; } else
-        LS_OP_NAME(FillSolidOp)
-        LS_OP_NAME(FillGradientOp)
-        LS_OP_NAME(FillRampOp)
-        LS_OP_NAME(FillDitherOp)
-        LS_OP_NAME(FillNoiseOp)
-        LS_OP_NAME(FillLinePatternOp)
-        LS_OP_NAME(FillTexturePatternOp)
-        LS_OP_NAME(FillSemanticColorOp)
-        LS_OP_NAME(StrokePolylineOp)
-        LS_OP_NAME(StrokeCurveOp)
-        LS_OP_NAME(StrokeRegionBoundaryOp)
-        LS_OP_NAME(StrokeBrushOp)
-        LS_OP_NAME(StrokePixelPathOp)
-        LS_OP_NAME(GenerateSilhouetteOutlineOp)
-        LS_OP_NAME(GenerateInnerOutlineOp)
-        LS_OP_NAME(GenerateOuterOutlineOp)
-        LS_OP_NAME(GenerateRegionOutlineOp)
-        LS_OP_NAME(GenerateMaterialBoundaryOutlineOp)
-        LS_OP_NAME(CleanupOutlineOp)
-        LS_OP_NAME(JoinCornersOp)
-        LS_OP_NAME(ResolveOutlineCollisionsOp)
-        LS_OP_NAME(TranslateOp)
-        LS_OP_NAME(RotateOp)
-        LS_OP_NAME(ScaleOp)
-        LS_OP_NAME(MirrorOp)
-        LS_OP_NAME(ShearOp)
-        LS_OP_NAME(SkewOp)
-        LS_OP_NAME(SquashOp)
-        LS_OP_NAME(StretchOp)
-        LS_OP_NAME(MatrixTransformOp)
-        LS_OP_NAME(BendOp)
-        LS_OP_NAME(WarpOp)
-        LS_OP_NAME(LatticeDeformOp)
-        LS_OP_NAME(EnvelopeDeformOp)
-        LS_OP_NAME(PinDeformOp)
-        LS_OP_NAME(WeightedDeformOp)
-        LS_OP_NAME(BoundaryDeformOp)
-        LS_OP_NAME(PathDeformOp)
-        LS_OP_NAME(PluginOp)
+        LS_OPERATION_TYPES(LS_OP_NAME)
         { return "UnknownOp"; }
 #undef LS_OP_NAME
     }, op);
+}
+
+std::vector<std::string_view> operationTypeNames() {
+    return {
+#define LS_OP_LITERAL(T) #T,
+        LS_OPERATION_TYPES(LS_OP_LITERAL)
+#undef LS_OP_LITERAL
+    };
+}
+
+bool makeOperationOfType(std::string_view typeName, Operation& out) {
+#define LS_OP_MATCH(T) if (typeName == #T) { out = T{}; return true; }
+    LS_OPERATION_TYPES(LS_OP_MATCH)
+#undef LS_OP_MATCH
+    return false;
 }
 
 bool operationIsTransform(const Operation& op) {

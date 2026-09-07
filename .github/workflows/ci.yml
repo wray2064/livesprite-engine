@@ -32,7 +32,7 @@ jobs:
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLS_BUILD_SHARED_C=ON
 
       - name: Build
         run: cmake --build build --config RelWithDebInfo

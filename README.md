@@ -36,8 +36,20 @@ cmake --build build
 ctest --test-dir build
 ```
 
-The library builds with warnings as errors and RTTI off. No third-party
+The library builds with warnings as errors, RTTI off, and the floating-point
+contract pinned so the arithmetic cannot drift between compilers. No third-party
 dependencies: not for graphics, not for JSON, not for the container format.
+
+To use it from another project, or another language, see
+[embedding](docs/embedding.md):
+
+```bash
+find_package(LiveSprite REQUIRED)        # C++
+target_link_libraries(app PRIVATE livesprite::livesprite)
+
+cmake -S . -B build -DLS_BUILD_SHARED_C=ON   # everything else: a loadable
+cmake --build build                          # livesprite_c.dll / .so / .dylib
+```
 
 ## Try it
 
@@ -45,7 +57,7 @@ dependencies: not for graphics, not for JSON, not for the container format.
 build/livesprite_example        # the worked example, prints its result as text
 build/livesprite_testbed --out testbed   # renders 15 scenes into a gallery page
 build/livesprite_bench          # performance baseline
-ctest --test-dir build          # 11 suites, plus the example
+ctest --test-dir build          # 13 suites, plus the example
 ```
 
 `livesprite_testbed` writes `testbed/index.html`, a self-contained page where
@@ -57,6 +69,7 @@ than asking you to compare by eye.
 | Document | What is in it |
 |---|---|
 | [Getting started](docs/getting-started.md) | Build a sprite in code, step by step |
+| [Embedding](docs/embedding.md) | Consuming the engine from C++, and from every other language |
 | [Concepts](docs/concepts.md) | The model: regions, operations, compiling, anchoring, attachment |
 | [Operations](docs/operations.md) | The catalogue: all 39 operation types and their parameters |
 | [File format](docs/file-format.md) | The document, the package container, metadata, versioning |
@@ -69,7 +82,7 @@ than asking you to compare by eye.
 ```
 include/livesprite/   the public API: one header per area, livesprite.h pulls them all in
 src/                  the implementation, split the way the spec splits it
-tests/                11 suites, one per area, run under ctest
+tests/                13 suites, one per area, run under ctest (one of them C)
 tools/                the testbed gallery and the benchmark
 examples/             the worked example the documentation quotes
 ```
@@ -77,9 +90,10 @@ examples/             the worked example the documentation quotes
 ## Status
 
 Feature-complete against the spec, with the deviations recorded in the spec
-documents themselves. Eleven test suites cover geometry, entity storage,
+documents themselves. Thirteen test suites cover geometry, entity storage,
 compilation, dithering, anchors, rendering controls, live instructions,
-serialization, packaging, editing support, and plugins.
+serialization, packaging, editing support, plugins, cross-platform determinism,
+and the C ABI.
 
 Known limits are listed in [performance and limits](docs/performance-and-limits.md)
 rather than left for you to discover.

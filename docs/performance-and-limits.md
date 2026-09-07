@@ -105,6 +105,18 @@ written packages. Ordered containers are used wherever iteration order could
 reach the output, hashes are explicit rather than library-defined, and packages
 carry fixed timestamps.
 
+Two things that would otherwise break it across platforms are dealt with
+directly. The engine carries its own sine, cosine, tangent and atan2 rather than
+calling the platform's, because IEEE-754 does not specify those to the last bit
+and the major C libraries genuinely disagree there — one bit in an angle moves a
+coverage decision, which moves a pixel. And the build pins `/fp:precise` and
+`-ffp-contract=off`, because GCC and Clang otherwise fuse `a*b+c` into an FMA
+and do different arithmetic from MSVC on identical source.
+
+The `livesprite_determinism` suite locks four scenes chosen to lean on that
+trigonometry to golden hashes, and CI runs it under MSVC, GCC, Clang and Apple
+Clang. A differing hash names a portability bug rather than a flaky test.
+
 The one way to break it is a plugin that declares `isDeterministic = false`.
 Those are refused in the `Export` profile for exactly that reason.
 

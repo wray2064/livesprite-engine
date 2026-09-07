@@ -536,8 +536,32 @@ using Operation = std::variant<
     PluginOp
 >;
 
+// The same list again, in a form code can walk.
+//
+// Anything that must handle every operation type generically -- naming them,
+// constructing one from a name, listing them for a binding -- expands this
+// rather than repeating the roll call. The static_assert below makes the two
+// lists a compile error if they ever disagree, so the duplication is checked
+// rather than trusted.
+#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp)
+
+#define LS_OP_COUNT_ONE(T) + 1
+static_assert(std::variant_size_v<Operation> == (0 LS_OPERATION_TYPES(LS_OP_COUNT_ONE)),
+              "LS_OPERATION_TYPES has drifted from the Operation variant");
+#undef LS_OP_COUNT_ONE
+
 // Stable type name for an Operation (serialization keys and debug output).
 std::string_view operationTypeName(const Operation& op);
+
+// Every operation type name, in declaration order. What a binding or a UI
+// enumerates when it wants to offer the catalogue without hard-coding it.
+std::vector<std::string_view> operationTypeNames();
+
+// Builds a default-constructed operation of the named type. The counterpart to
+// operationTypeName, and the way anything outside C++ creates an operation:
+// name the type, then set parameters by name. Returns false for an unknown
+// name rather than inventing an operation.
+bool makeOperationOfType(std::string_view typeName, Operation& out);
 
 // True if the operation resolves as a transform or deform of prior content
 // rather than as a mark that adds content.

@@ -381,6 +381,8 @@ bool readOperation(const json::Value& obj, const DecodeContext& ctx,
     consumed.insert("type");
     const std::string& name = type->asString();
 
+    // The type roll call lives in ls_operations.h; expanding it here means a
+    // new operation cannot be added and silently left unreadable.
     auto tryType = [&](auto prototype) {
         using Op = decltype(prototype);
         if (name != operationTypeName(Operation{Op{}})) {
@@ -393,22 +395,10 @@ bool readOperation(const json::Value& obj, const DecodeContext& ctx,
         return true;
     };
 
-    return tryType(FillSolidOp{}) || tryType(FillGradientOp{}) || tryType(FillRampOp{}) ||
-           tryType(FillDitherOp{}) || tryType(FillNoiseOp{}) || tryType(FillLinePatternOp{}) ||
-           tryType(FillTexturePatternOp{}) || tryType(FillSemanticColorOp{}) ||
-           tryType(StrokePolylineOp{}) || tryType(StrokeCurveOp{}) ||
-           tryType(StrokeRegionBoundaryOp{}) || tryType(StrokeBrushOp{}) ||
-           tryType(StrokePixelPathOp{}) || tryType(GenerateSilhouetteOutlineOp{}) ||
-           tryType(GenerateInnerOutlineOp{}) || tryType(GenerateOuterOutlineOp{}) ||
-           tryType(GenerateRegionOutlineOp{}) || tryType(GenerateMaterialBoundaryOutlineOp{}) ||
-           tryType(CleanupOutlineOp{}) || tryType(JoinCornersOp{}) ||
-           tryType(ResolveOutlineCollisionsOp{}) || tryType(TranslateOp{}) || tryType(RotateOp{}) ||
-           tryType(ScaleOp{}) || tryType(MirrorOp{}) || tryType(ShearOp{}) || tryType(SkewOp{}) ||
-           tryType(SquashOp{}) || tryType(StretchOp{}) || tryType(MatrixTransformOp{}) ||
-           tryType(BendOp{}) ||
-           tryType(WarpOp{}) || tryType(LatticeDeformOp{}) || tryType(EnvelopeDeformOp{}) ||
-           tryType(PinDeformOp{}) || tryType(WeightedDeformOp{}) || tryType(BoundaryDeformOp{}) ||
-           tryType(PathDeformOp{}) || tryType(PluginOp{});
+#define LS_OP_TRY(T) if (tryType(T{})) { return true; }
+    LS_OPERATION_TYPES(LS_OP_TRY)
+#undef LS_OP_TRY
+    return false;
 }
 
 json::Value writeGeometry(const GeometryData& data) {
