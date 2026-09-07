@@ -42,6 +42,12 @@ if (LS_BUILD_TESTBED)
 
     add_executable(livesprite_bench tools/ls_bench.cpp)
     target_link_libraries(livesprite_bench PRIVATE livesprite)
+
+    # The worked example the documentation quotes. Built and run with the tests
+    # so the documentation cannot drift from code that no longer compiles.
+    add_executable(livesprite_example examples/first_sprite.cpp)
+    target_link_libraries(livesprite_example PRIVATE livesprite)
+    add_test(NAME livesprite_example COMMAND livesprite_example)
 endif()
 
 option(LS_BUILD_TESTS "Build engine tests" ON)

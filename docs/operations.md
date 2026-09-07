@@ -1,0 +1,145 @@
+# Operations
+
+The 39 operation types, what each one does, and the parameters worth knowing.
+Full field lists are in [`ls_operations.h`](../include/livesprite/ls_operations.h);
+at runtime, `describeOperation(id)` reports every drivable parameter and its
+type.
+
+An operation is added to a layer and resolved in order:
+
+```cpp
+FillSolidOp fill;
+fill.targetRegion  = region;
+fill.paletteRole   = 1;
+const OperationId id = ctx->addOperation(layer, fill).value;
+```
+
+Nearly every operation carries `blend` and `opacity`. Fills and outlines carry a
+`paletteRole` with a `fallbackColor` for when nothing resolves.
+
+## Fills
+
+| Operation | What it does |
+|---|---|
+| `FillSolidOp` | One colour across a region, from a role or a literal |
+| `FillSemanticColorOp` | A colour role, and nothing else: the palette decides everything |
+| `FillGradientOp` | A ramp along an axis between two points, optionally repeating |
+| `FillRampOp` | A ramp across the region bounds at an angle |
+| `FillDitherOp` | A value resolved against a threshold pattern, picking between ramp stops |
+| `FillNoiseOp` | Hashed value per cell through a ramp: deterministic, seeded |
+| `FillLinePatternOp` | Analytic line screen: spacing, angle, line width, two roles |
+| `FillTexturePatternOp` | Tiles a pattern, with scale, offset and rotation. A tile carrying colours paints them directly, which is how a tileable texture fill works |
+
+`FillDitherOp` is the one to understand, since it covers both classic dithering
+and gradients:
+
+```cpp
+FillDitherOp dither;
+dither.targetRegion   = region;
+dither.ramp           = ramp;          // 2 stops = two-tone, more = banded gradient
+dither.pattern        = pattern;       // a threshold matrix
+dither.density        = 0.5f;          // used when modulation is Constant
+dither.modulation     = DitherModulation::Linear;   // or Constant, Radial, Angular
+dither.gradientStart  = {0.f, 0.f};
+dither.gradientEnd    = {24.f, 0.f};
+dither.anchor         = PatternAnchor::Local;       // Local, Global or Fixed
+dither.coordinateSpace = CoordinateSpace::Object;   // frame for the gradient points
+```
+
+`anchor` also applies to `FillNoiseOp`, `FillLinePatternOp` and
+`FillTexturePatternOp`.
+
+## Strokes
+
+| Operation | What it does |
+|---|---|
+| `StrokePolylineOp` | Strokes a polyline: width, cap, join, miter limit, taper, snap, optional pattern |
+| `StrokeCurveOp` | The same for a flattened curve |
+| `StrokeRegionBoundaryOp` | Strokes the edge of a region. An authored loop uses its own recorded outline |
+| `StrokeBrushOp` | Stamps along a path: size, spacing, deterministic scatter, optional pattern as the stamp shape |
+| `StrokePixelPathOp` | Paints exactly the pixels a path covers, no width |
+
+Strokes are geometry: one quad per segment, a join shape at every interior
+vertex, a cap at each open end. `StrokeJoin::Miter` falls back to a bevel when a
+turn is too sharp for `miterLimit`. `SnapPolicy::Grid` puts vertices on pixel
+corners and `HalfGrid` on pixel centres, which is what keeps a one-pixel line
+from straddling two columns. A `strokePattern` thins the mark along its length.
+
+## Outlines
+
+| Operation | What it does |
+|---|---|
+| `GenerateSilhouetteOutlineOp` | Outlines whatever the layer has drawn so far, optionally limited by a boundary |
+| `GenerateInnerOutlineOp` | Inside the region edge |
+| `GenerateOuterOutlineOp` | Outside it; `OutlineDiagonal` decides how corners are treated |
+| `GenerateRegionOutlineOp` | Inside, centre or outside, by `OutlineSide` |
+| `GenerateMaterialBoundaryOutlineOp` | Where two different colours meet inside a layer |
+| `CleanupOutlineOp` | Post-processes an earlier outline: drops isolated pixels, optionally fills notches |
+| `JoinCornersOp` | Bridges the gap between two outlines within a radius |
+| `ResolveOutlineCollisionsOp` | Where outlines overlap, the first one listed owns the pixel |
+
+The last three name earlier operations by id, so order matters: they act on
+what has already been resolved in the same layer.
+
+## Transforms
+
+| Operation | Notes |
+|---|---|
+| `TranslateOp` | `delta`, plus a rounding policy |
+| `RotateOp` | `angleDegrees`, `pivot` or `pivotFallback`, sampling, rounding |
+| `ScaleOp` | `factor`, pivot, sampling, rounding |
+| `MirrorOp` | `MirrorAxis::X` flips left to right |
+| `ShearOp` | Shear factors per axis |
+| `SkewOp` | Skew angles per axis |
+| `SquashOp` / `StretchOp` | Volume-preserving: one axis by the factor, the other by its reciprocal. With a boundary, the falloff is applied per pixel |
+| `MatrixTransformOp` | An arbitrary `Mat3f`, for anything the named ones do not cover |
+
+**Targeting.** Every transform carries `targetRegion`, `targetLayer` and
+`target`. The narrowest one set wins: a region if named, else the layer, else
+the sprite owning the operation.
+
+There is deliberately no operation for rotate-and-scale about a pivot (that is
+`RotateOp` then `ScaleOp`, both of which take pivots), none for attaching to a
+socket (that is `attachSprite`), and none for placing a whole sprite (that is
+the sprite transform).
+
+## Deforms
+
+| Operation | What it does |
+|---|---|
+| `BendOp` | Progressive rotation along an axis, with falloff |
+| `WarpOp` | Handle points with displacements, within a radius |
+| `LatticeDeformOp` | A grid of control points, bilinear between them |
+| `EnvelopeDeformOp` | Follows a curve as an envelope |
+| `PinDeformOp` | Pins and their targets, weighted by distance and stiffness |
+| `WeightedDeformOp` | Handles with explicit per-handle weights |
+| `BoundaryDeformOp` | Maps a region toward a target shape |
+| `PathDeformOp` | Bends content along a path, optionally following its tangent |
+
+Deforms are forward-mapped with hole repair, unlike the affine transforms which
+resolve coverage geometrically. A `boundary` scopes a deform and supplies a
+falloff; the influence a boundary reports through `getBoundaryInfluence` is
+exactly the influence the compiler applies.
+
+## Plugin operations
+
+`PluginOp` carries a `typeId` and a parameter bag, and is resolved by whatever
+was registered under that id — an operation resolver, a fill resolver, or a
+transform resolver. Registration declares the parameter schema, what the
+operation reads (so it joins the dependency graph), and whether it is
+deterministic. Non-deterministic operations are refused in the `Export` profile.
+
+```cpp
+PluginOperationDesc desc;
+desc.typeId          = "com.myapp.myop";
+desc.isDeterministic = true;
+desc.getDependencies = [](const PluginOp& op) { /* ids this op reads */ };
+desc.resolve         = [](const PluginOp& op, PluginResolveContext& ctx) {
+    writePixel(*ctx.outputBuffer, x, y, ctx.resolveColor(role));
+    return LSError::None;
+};
+ctx->registerOperationType(desc);
+```
+
+Adding a `PluginOp` whose type is not registered fails at authoring time rather
+than at compile time.
