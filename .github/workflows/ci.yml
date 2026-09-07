@@ -1,0 +1,99 @@
+name: ci
+
+# The determinism suite is the reason this matrix exists. The golden hashes were
+# locked on Windows/MSVC; running the same suite under GCC, Clang and Apple
+# Clang is what turns "identical bytes on every platform" from a claim into a
+# fact. If a hash differs on one row, that row's toolchain does different
+# arithmetic and the engine has a portability bug, not a flaky test.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "windows / msvc",   os: windows-latest }
+          - { name: "ubuntu / gcc",     os: ubuntu-latest,  cc: gcc,   cxx: g++ }
+          - { name: "ubuntu / clang",   os: ubuntu-latest,  cc: clang, cxx: clang++ }
+          - { name: "macos / apple clang", os: macos-latest }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo
+
+      - name: Test
+        run: ctest --test-dir build --build-config RelWithDebInfo --output-on-failure
+
+  # A library nobody can consume is not a library. This builds a project that
+  # knows nothing about the engine's source layout and links it through the
+  # installed CMake package, so a broken config file fails here rather than in
+  # somebody else's repository.
+  consume:
+    name: consume the installed package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and install the engine
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          cmake --install build --prefix "$PWD/prefix"
+
+      - name: Build a consumer against find_package
+        run: |
+          mkdir -p consumer
+          cat > consumer/main.cpp <<'EOF'
+          #include <livesprite/livesprite.h>
+          #include <cstdio>
+          int main() {
+              auto ctx = ls::LSContext::create();
+              const ls::DocumentId doc = ctx->createDocument({"consumer", 8, 8}).value;
+              const ls::SpriteId sprite = ctx->createSprite(doc).value;
+              const ls::LayerId layer = ctx->createLayer(sprite, {"main"}).value;
+              const ls::GeometryId rect = ctx->createRect(doc, {{2.f, 2.f}, 4.f, 4.f, 0.f}).value;
+              ls::FillSolidOp fill;
+              fill.targetRegion = ctx->createRegionFromGeometry(rect).value;
+              fill.fallbackColor = {255, 128, 0, 255};
+              ctx->addOperation(layer, fill);
+              ls::CompileProfile profile;
+              profile.type = ls::CompileProfileType::Export;
+              profile.outputWidth = 8;
+              profile.outputHeight = 8;
+              auto compiled = ctx->compileSprite(sprite, profile);
+              if (compiled.fail()) { return 1; }
+              int opaque = 0;
+              for (int y = 0; y < 8; ++y)
+                  for (int x = 0; x < 8; ++x)
+                      opaque += ls::readPixel(compiled.value.raster, x, y).a != 0 ? 1 : 0;
+              std::printf("consumer sees %d opaque pixels\n", opaque);
+              return opaque == 16 ? 0 : 1;
+          }
+          EOF
+          cat > consumer/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(livesprite_consumer LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          find_package(LiveSprite REQUIRED)
+          add_executable(consumer main.cpp)
+          target_link_libraries(consumer PRIVATE livesprite::livesprite)
+          EOF
+          cmake -S consumer -B consumer/build -DCMAKE_PREFIX_PATH="$PWD/prefix"
+          cmake --build consumer/build
+          ./consumer/build/consumer

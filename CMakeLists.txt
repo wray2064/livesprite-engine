@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.20)
 project(livesprite_engine VERSION 0.1.0 LANGUAGES CXX)
 
+# When LiveSprite is pulled into another project with add_subdirectory or
+# FetchContent, that project wants the library and nothing else: not our tests,
+# not our testbed, and definitely not our install rules writing into its prefix.
+if (CMAKE_VERSION VERSION_LESS 3.21)
+    get_property(LS_HAS_PARENT DIRECTORY PROPERTY PARENT_DIRECTORY)
+    if (LS_HAS_PARENT)
+        set(LS_TOP_LEVEL OFF)
+    else()
+        set(LS_TOP_LEVEL ON)
+    endif()
+else()
+    set(LS_TOP_LEVEL ${PROJECT_IS_TOP_LEVEL})
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -40,7 +54,11 @@ else()
         -Wall -Wextra -Wpedantic -Werror -fno-rtti -ffp-contract=off)
 endif()
 
-option(LS_BUILD_TESTBED "Build the engine testbed gallery tool" ON)
+# Consumers write livesprite::livesprite whether they found an installed
+# package or pulled the source in directly, so the two paths are interchangeable.
+add_library(livesprite::livesprite ALIAS livesprite)
+
+option(LS_BUILD_TESTBED "Build the engine testbed gallery tool" ${LS_TOP_LEVEL})
 if (LS_BUILD_TESTBED)
     add_executable(livesprite_testbed tools/ls_testbed.cpp)
     target_link_libraries(livesprite_testbed PRIVATE livesprite)
@@ -56,7 +74,7 @@ if (LS_BUILD_TESTBED)
     add_test(NAME livesprite_example COMMAND livesprite_example)
 endif()
 
-option(LS_BUILD_TESTS "Build engine tests" ON)
+option(LS_BUILD_TESTS "Build engine tests" ${LS_TOP_LEVEL})
 if (LS_BUILD_TESTS)
     enable_testing()
 
@@ -111,16 +129,56 @@ if (LS_BUILD_TESTS)
     add_test(NAME livesprite_plugin COMMAND livesprite_plugin_tests)
 endif()
 
-install(TARGETS livesprite
-    EXPORT livesprite-targets
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-)
+# ---------------------------------------------------------------- install ----
+#
+# Two supported ways to consume the engine from C++:
+#
+#   find_package(LiveSprite REQUIRED)            # against an installed copy
+#   FetchContent_MakeAvailable(livesprite)       # against the source
+#
+# then in both cases:
+#
+#   target_link_libraries(my_app PRIVATE livesprite::livesprite)
 
-install(DIRECTORY include/ DESTINATION include)
-install(EXPORT livesprite-targets
-    FILE LiveSpriteTargets.cmake
-    NAMESPACE livesprite::
-    DESTINATION lib/cmake/livesprite
-)
+option(LS_INSTALL "Generate the LiveSprite install and package rules" ${LS_TOP_LEVEL})
+
+if (LS_INSTALL)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+
+    install(TARGETS livesprite
+        EXPORT livesprite-targets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    install(EXPORT livesprite-targets
+        FILE LiveSpriteTargets.cmake
+        NAMESPACE livesprite::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/LiveSprite
+    )
+
+    # SameMajorVersion while the major is 0 still means exact-minor matching,
+    # which is the honest contract before 1.0: the API is not settled yet.
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/LiveSpriteConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMinorVersion
+    )
+
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/LiveSpriteConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/LiveSpriteConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/LiveSprite
+    )
+
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/LiveSpriteConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/LiveSpriteConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/LiveSprite
+    )
+endif()

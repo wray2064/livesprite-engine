@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+# LiveSprite has no dependencies to find: not for graphics, not for JSON, not
+# for the container format. A consumer needs the targets file and nothing else.
+
+include("${CMAKE_CURRENT_LIST_DIR}/LiveSpriteTargets.cmake")
+
+check_required_components(LiveSprite)
