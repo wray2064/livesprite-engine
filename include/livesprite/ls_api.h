@@ -319,6 +319,51 @@ constexpr size_t kMetadataMaxKeyLength   = 128;
 constexpr size_t kMetadataMaxValueLength = 64 * 1024;
 constexpr size_t kMetadataMaxPerEntity   = 64;
 
+// ---------------------------------------------------------------------------
+// Packages
+//
+// A LiveSprite package is a container: the engine document, plus whatever files
+// an app needs to keep with it. Thumbnails, imported references, a palette file
+// somebody dragged in. Bulk data belongs beside the document rather than inside
+// it, where it would bloat the JSON and slow every load.
+//
+// The engine owns the container; apps own the entries. The engine guarantees it
+// carries entries it does not understand through a read and write cycle, the
+// same promise it makes for unknown fields, so two apps can share one file
+// without erasing each other.
+//
+// The format is a ZIP with stored (uncompressed) entries. That choice is
+// deliberate on both counts this file cares about:
+//   - Portability: any tool and any language can open it. Rename it to .zip and
+//     it expands.
+//   - Safety: nothing is compressed, so a decompression bomb cannot exist. A
+//     package containing compressed entries is refused rather than expanded.
+//
+// Everything in a received package is untrusted input. It came from whoever
+// sent the file. Content types are a claim by the writer, never a fact, and
+// nothing in a package should ever be executed.
+// ---------------------------------------------------------------------------
+
+// Entry names are opaque identifiers, not paths. The first segment is the
+// owning namespace ("fast/thumbnail.png"). Separators beyond that are allowed
+// for the owner to organise its own space, but a name can never climb out of
+// it: no "..", no leading slash, no backslash, no drive letter.
+constexpr size_t kPackageMaxNameLength   = 255;
+constexpr size_t kPackageMaxEntries      = 1024;
+constexpr size_t kPackageMaxEntrySize    = 32u * 1024u * 1024u;
+constexpr size_t kPackageMaxTotalSize    = 128u * 1024u * 1024u;
+
+struct PackageEntry {
+    std::string          name;         // "fast/thumbnail.png"
+    std::string          contentType;  // a claim by the writer; never trusted
+    std::vector<uint8_t> data;
+};
+
+struct PackageContents {
+    SerializedData            document;   // the engine document from the package
+    std::vector<PackageEntry> entries;    // everything else, in name order
+};
+
 struct CacheStats {
     size_t entries      = 0;
     size_t hits         = 0;
@@ -727,6 +772,27 @@ public:
     Result<std::string>     serializeOperation(OperationId id) const;
     Result<OperationId>     deserializeOperation(LayerId into, std::string_view json);
     Result<SerializedData>  migrateVersion(const SerializedData& data, uint32_t targetVersion);
+
+    // =======================================================================
+    // Packages
+    // =======================================================================
+
+    // Write a document and a set of app entries as one container.
+    Result<SerializedData> writePackage(DocumentId doc,
+                                        const std::vector<PackageEntry>& entries) const;
+
+    // Read a container without loading anything into the engine, so a caller
+    // can inspect what arrived before acting on it.
+    Result<PackageContents> readPackage(const SerializedData& package) const;
+
+    // Read a container and load its document. Entries are handed back untouched
+    // for the app to deal with, including entries this app did not write.
+    Result<DocumentId> loadPackage(const SerializedData& package,
+                                   std::vector<PackageEntry>* entries = nullptr);
+
+    // Whether a name is acceptable as an entry name. Exposed so an app can
+    // check before it builds an entry rather than after.
+    static bool isValidPackageEntryName(std::string_view name);
 
     // =======================================================================
     // SECTION 18: Plugin Registration

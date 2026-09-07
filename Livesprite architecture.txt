@@ -579,6 +579,21 @@ Important for Fast/Pract compatibility:
 
 unsupported app data is preserved
 core data is always readable
+
+There are two places app data can live.
+
+Metadata is namespaced key and value pairs attached to any entity: which frame
+an app thinks a sprite is, whether a panel row is collapsed. It is small, it is
+remapped when a document loads, and it survives undo.
+
+A package is a container holding the document plus whole files: thumbnails,
+imported references, a palette from elsewhere. The engine owns the container and
+carries entries it does not understand; apps own the entries and write into
+their own namespace.
+
+Both treat app data as opaque. The engine stores it and hands it back and never
+parses or executes it, and data that arrives from someone else is untrusted
+input, whichever of the two it came in.
 18. Plugin/math extension interface
 
 The core can expose a controlled operation plugin interface without exposing Pract systems.

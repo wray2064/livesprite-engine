@@ -13,6 +13,7 @@ add_library(livesprite STATIC
     src/ls_serialize.cpp
     src/ls_instructions.cpp
     src/ls_json.cpp
+    src/ls_package.cpp
 )
 
 target_include_directories(livesprite
@@ -82,6 +83,10 @@ if (LS_BUILD_TESTS)
     add_executable(livesprite_editing_tests tests/editing_tests.cpp)
     target_link_libraries(livesprite_editing_tests PRIVATE livesprite)
     add_test(NAME livesprite_editing COMMAND livesprite_editing_tests)
+
+    add_executable(livesprite_package_tests tests/package_tests.cpp)
+    target_link_libraries(livesprite_package_tests PRIVATE livesprite)
+    add_test(NAME livesprite_package COMMAND livesprite_package_tests)
 
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)

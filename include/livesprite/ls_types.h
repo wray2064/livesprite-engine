@@ -91,6 +91,9 @@ enum class LSError : uint32_t {
     PaletteNotBound,
     RasterAllocationFailed,
     NotImplemented,
+    PackageMalformed,        // the container is not a package this build can read
+    PackageLimitExceeded,    // a package asks for more than the limits allow
+    PackageEntryRejected,    // an entry name or claim is not acceptable
 };
 
 std::string_view lsErrorString(LSError err);

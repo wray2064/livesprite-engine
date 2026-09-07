@@ -218,7 +218,37 @@ The engine owns the canonical LiveSprite binary/JSON representation.
 ### Versioning
 - Engine version is a `uint32_t` embedded in every serialized document
 - Breaking changes increment the major version
-- Migration functions live in `ls_serialize.cpp`
+- Migration steps chain from one major to the next and live in `ls_serialize.cpp`
+
+### Packages
+
+A document may travel inside a package: the engine document plus whatever files
+an app keeps with it — a thumbnail, an imported reference, a palette dropped in
+from elsewhere. Bulk data belongs beside the document, not inside the JSON,
+where it would bloat every load.
+
+**The engine owns the container; apps own the entries.** The engine defines the
+package and guarantees it carries entries it does not understand through a read
+and write cycle, the same promise it makes for unknown fields. Apps write into
+their own namespace, so two apps can share one file without erasing each other.
+
+The format is a ZIP holding `livesprite.json`, a `manifest.json` describing what
+the writer claimed, and the app entries. Two properties are deliberate:
+
+- **Portable.** Stored entries, no extra fields, fixed timestamps. Any tool in
+  any language opens it; rename it to `.zip` and it expands. Writing the same
+  state twice produces identical bytes.
+- **Safe.** Nothing is compressed, so a decompression bomb has nowhere to live,
+  and a package containing compressed entries is refused rather than expanded.
+  Entry names are validated, never repaired: no `..`, no absolute path, no drive
+  letter, no backslash, and the first segment must name the owner. Sizes are
+  checked against limits before anything is allocated, every offset is bounds
+  checked, and every entry carries a CRC so corruption stops at the reader.
+
+Everything in a received package is untrusted input. Content types are a claim
+by the writer, not a fact. Nothing in a package should ever be executed, and
+undo history does not belong in a file that gets shared: it would hand the
+recipient every version of the sprite the author thought they had deleted.
 
 ---
 

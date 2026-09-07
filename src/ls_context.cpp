@@ -215,6 +215,9 @@ std::string_view lsErrorString(LSError err) {
         case LSError::PaletteNotBound:            return "PaletteNotBound";
         case LSError::RasterAllocationFailed:     return "RasterAllocationFailed";
         case LSError::NotImplemented:             return "NotImplemented";
+        case LSError::PackageMalformed:           return "PackageMalformed";
+        case LSError::PackageLimitExceeded:       return "PackageLimitExceeded";
+        case LSError::PackageEntryRejected:       return "PackageEntryRejected";
     }
     return "Unknown";
 }
