@@ -20,19 +20,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: "windows / msvc",   os: windows-latest }
-          - { name: "ubuntu / gcc",     os: ubuntu-latest,  cc: gcc,   cxx: g++ }
-          - { name: "ubuntu / clang",   os: ubuntu-latest,  cc: clang, cxx: clang++ }
-          - { name: "macos / apple clang", os: macos-latest }
+          # The compiler is chosen with CMake arguments rather than CC/CXX
+          # environment variables: a matrix row that does not set them would
+          # export CC="" and CXX="", and an empty compiler variable fails
+          # CMake's compiler check on the rows that meant to say "use the
+          # default one".
+          - { name: "windows / msvc",      os: windows-latest, args: "" }
+          - { name: "ubuntu / gcc",        os: ubuntu-latest,
+              args: "-DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++" }
+          - { name: "ubuntu / clang",      os: ubuntu-latest,
+              args: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" }
+          - { name: "macos / apple clang", os: macos-latest, args: "" }
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLS_BUILD_SHARED_C=ON
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLS_BUILD_SHARED_C=ON ${{ matrix.args }}
 
       - name: Build
         run: cmake --build build --config RelWithDebInfo
@@ -97,3 +101,20 @@ jobs:
           cmake -S consumer -B consumer/build -DCMAKE_PREFIX_PATH="$PWD/prefix"
           cmake --build consumer/build
           ./consumer/build/consumer
+
+  # The C ABI exists so that something which is not C++ can call the engine.
+  # This job is the only place that claim is actually tested end to end: it
+  # loads the shared library with nothing but ctypes and compiles a sprite.
+  bindings:
+    name: load the shared library from Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the C ABI as a shared library
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLS_BUILD_SHARED_C=ON -DLS_BUILD_TESTS=OFF -DLS_BUILD_TESTBED=OFF
+          cmake --build build
+
+      - name: Drive it from Python
+        run: python3 tools/ls_ctypes_smoke.py build/liblivesprite_c.so

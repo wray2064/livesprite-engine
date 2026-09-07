@@ -1,0 +1,12 @@
+# Normalise line endings in the repository to LF.
+#
+# Development happens on Windows, where git converts to CRLF in the working
+# copy. Without this, whether a file arrives at a Linux CI runner with CRLF
+# depends on each contributor's core.autocrlf setting -- and a shell script or
+# a heredoc with CRLF fails there in ways that look nothing like their cause.
+* text=auto eol=lf
+
+# Files where the bytes are the point.
+*.png  binary
+*.zip  binary
+*.lsprite binary

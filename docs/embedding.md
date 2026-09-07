@@ -171,9 +171,18 @@ doc = C.c_uint64()
 dll.ls_document_create(ctx, b"from-python", 24, 24, C.byref(doc))
 ```
 
-Declare `argtypes` for anything taking a struct or a float by value; the rest
-works with ctypes' defaults. The same shape applies to C# `DllImport`, Rust
-`extern "C"`, and Node N-API.
+Declare `argtypes` for anything taking a struct or a float by value, and
+`restype` for anything returning a pointer or a size — ctypes assumes `int`
+otherwise, which silently truncates pointers on 64-bit. The same shape applies
+to C# `DllImport`, Rust `extern "C"`, and Node N-API.
+
+A complete working version is in [`tools/ls_ctypes_smoke.py`](../tools/ls_ctypes_smoke.py),
+which CI runs on every push. Copy it as the starting point for a binding:
+
+```bash
+cmake -S . -B build -DLS_BUILD_SHARED_C=ON && cmake --build build
+python3 tools/ls_ctypes_smoke.py build/liblivesprite_c.so
+```
 
 ### What the C API does not cover
 
@@ -214,3 +223,6 @@ copying if you package the engine yourself:
 - The CI `consume` job installs the engine and builds a project that knows
   nothing about our source layout against `find_package`, so a broken config
   file fails in our repository rather than in yours.
+- The CI `bindings` job loads the shared library with ctypes and compiles a
+  sprite, which is the only place the "callable from other languages" claim is
+  tested rather than asserted.
