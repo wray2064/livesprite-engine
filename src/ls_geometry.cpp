@@ -7,6 +7,7 @@
 // [x0, x1) at row y, sorted by (y, x0), non-overlapping and non-abutting.
 
 #include "livesprite/ls_geometry.h"
+#include "ls_math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -772,7 +773,7 @@ std::vector<Vec2f> simplifyPath(const std::vector<Vec2f>& points, const Simplify
     // Split at corners sharper than cornerAngle, then simplify each run.
     std::vector<size_t> anchors { 0 };
     if (params.preserveCorners) {
-        const float cosLimit = std::cos(params.cornerAngle * kPi / 180.f);
+        const float cosLimit = math::cosf(params.cornerAngle * kPi / 180.f);
         for (size_t i = 1; i + 1 < points.size(); ++i) {
             const Vec2f a { points[i].x - points[i - 1].x, points[i].y - points[i - 1].y };
             const Vec2f b { points[i + 1].x - points[i].x, points[i + 1].y - points[i].y };
@@ -1095,8 +1096,8 @@ Mat3f Mat3f::translation(Vec2f t) {
 
 Mat3f Mat3f::rotation(float angleDegrees) {
     const float radians = angleDegrees * 3.14159265358979323846f / 180.f;
-    const float c = std::cos(radians);
-    const float s = std::sin(radians);
+    const float c = math::cosf(radians);
+    const float s = math::sinf(radians);
     Mat3f m;
     m.m[0] =  c; m.m[1] = -s;
     m.m[3] =  s; m.m[4] =  c;

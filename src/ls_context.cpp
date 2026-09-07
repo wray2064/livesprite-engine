@@ -6,6 +6,7 @@
 // and save/load in ls_serialize.cpp.
 
 #include "ls_internal.h"
+#include "ls_math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -278,7 +279,7 @@ float applyFalloffCurve(float t, Falloff falloff) {
         case Falloff::Linear:   return clamped;
         case Falloff::Smooth:   return clamped * clamped * (3.f - 2.f * clamped);
         case Falloff::Sharp:    return clamped * clamped;
-        case Falloff::Cosine:   return 0.5f - 0.5f * std::cos(clamped * 3.14159265358979323846f);
+        case Falloff::Cosine:   return 0.5f - 0.5f * math::cosf(clamped * 3.14159265358979323846f);
         case Falloff::Constant: return clamped > 0.f ? 1.f : 0.f;
     }
     return clamped;
@@ -725,8 +726,8 @@ std::vector<Vec2f> LSContext::Impl::geometryPath(const GeometryData& data) const
             constexpr int kSteps = 64;
             for (int i = 0; i < kSteps; ++i) {
                 const float t = static_cast<float>(i) / static_cast<float>(kSteps) * 6.28318530718f;
-                points.push_back({ shape.center.x + std::cos(t) * shape.radiusX,
-                                   shape.center.y + std::sin(t) * shape.radiusY });
+                points.push_back({ shape.center.x + math::cosf(t) * shape.radiusX,
+                                   shape.center.y + math::sinf(t) * shape.radiusY });
             }
             return points;
         } else if constexpr (std::is_same_v<Shape, CircleDesc>) {
@@ -734,8 +735,8 @@ std::vector<Vec2f> LSContext::Impl::geometryPath(const GeometryData& data) const
             constexpr int kSteps = 64;
             for (int i = 0; i < kSteps; ++i) {
                 const float t = static_cast<float>(i) / static_cast<float>(kSteps) * 6.28318530718f;
-                points.push_back({ shape.center.x + std::cos(t) * shape.radius,
-                                   shape.center.y + std::sin(t) * shape.radius });
+                points.push_back({ shape.center.x + math::cosf(t) * shape.radius,
+                                   shape.center.y + math::sinf(t) * shape.radius });
             }
             return points;
         } else {
@@ -2797,8 +2798,8 @@ Result<PatternId> LSContext::createLineDitherPattern(DocumentId doc, float angle
     }
     const uint32_t tile = static_cast<uint32_t>(std::max(2.f, std::ceil(spacing * 2.f)));
     const float radians = angle * 3.14159265358979323846f / 180.f;
-    const float nx = std::cos(radians);
-    const float ny = std::sin(radians);
+    const float nx = math::cosf(radians);
+    const float ny = math::sinf(radians);
 
     PatternTileDesc desc;
     desc.name = "lines";

@@ -15,6 +15,7 @@
 //      moves.
 
 #include "ls_internal.h"
+#include "ls_math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -784,8 +785,8 @@ PatternSample samplePattern(const PatternData* pattern, float x, float y, Vec2f 
     }
     if (angleDegrees != 0.f) {
         const float radians = -angleDegrees * kPi / 180.f;
-        const float c = std::cos(radians);
-        const float s = std::sin(radians);
+        const float c = math::cosf(radians);
+        const float s = math::sinf(radians);
         const float rotatedX = c * localX - s * localY;
         const float rotatedY = s * localX + c * localY;
         localX = rotatedX;
@@ -858,8 +859,8 @@ float modulationValue(DitherModulation modulation, float density,
             return clamp01(distance / radius);
         }
         case DitherModulation::Angular: {
-            const float reference = std::atan2(dy, dx);
-            float angle = std::atan2(py - start.y, px - start.x) - reference;
+            const float reference = math::atan2f(dy, dx);
+            float angle = math::atan2f(py - start.y, px - start.x) - reference;
             while (angle < 0.f)          { angle += 2.f * kPi; }
             while (angle >= 2.f * kPi)   { angle -= 2.f * kPi; }
             return clamp01(angle / (2.f * kPi));
@@ -1281,8 +1282,8 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     }
     if (const auto* skew = std::get_if<SkewOp>(&op)) {
         const Vec2f pivot = pivotOf(skew->pivot, skew->pivotFallback);
-        const Vec2f shear { std::tan(skew->angleX * kPi / 180.f),
-                            std::tan(skew->angleY * kPi / 180.f) };
+        const Vec2f shear { math::tanf(skew->angleX * kPi / 180.f),
+                            math::tanf(skew->angleY * kPi / 180.f) };
         const Mat3f matrix = Mat3f::aroundPivot(Mat3f::shearing(shear), pivot);
         return runMatrix(matrix, skew->targetRegion, skew->sampling);
     }
@@ -1352,8 +1353,8 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
             const float angle = bend->strength * t * kPi / 180.f;
             const float dx = p.x - originX;
             const float dy = p.y - originY;
-            const float c = std::cos(angle);
-            const float s = std::sin(angle);
+            const float c = math::cosf(angle);
+            const float s = math::sinf(angle);
             return Vec2f { originX + c * dx - s * dy + bend->angle * t,
                            originY + s * dx + c * dy };
         }, trackedPoints);
@@ -1639,7 +1640,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const RampData* ramp = env.impl->findRamp(fill->ramp);
         const Rect2i box = geom::bounds(*coverage);
         const float radians = fill->angle * kPi / 180.f;
-        const Vec2f axis { std::cos(radians), std::sin(radians) };
+        const Vec2f axis { math::cosf(radians), math::sinf(radians) };
         const float span = std::max(1.f, std::fabs(axis.x) * static_cast<float>(box.width()) +
                                           std::fabs(axis.y) * static_cast<float>(box.height()));
         const Vec2f origin { static_cast<float>(box.min.x), static_cast<float>(box.min.y) };
@@ -1688,8 +1689,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const Color lineColor = env.role(fill->lineRole, Color::black());
         const Color bgColor = env.role(fill->bgRole, Color::transparent());
         const float radians = fill->angle * kPi / 180.f;
-        const float nx = std::cos(radians);
-        const float ny = std::sin(radians);
+        const float nx = math::cosf(radians);
+        const float ny = math::sinf(radians);
         const float spacing = std::max(1.f, fill->spacing);
         const float lineWidth = std::max(0.f, fill->lineWidth);
 

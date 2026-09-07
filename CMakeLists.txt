@@ -28,10 +28,16 @@ target_include_directories(livesprite
 # RTTI is switched off in the compiler; the boundary is held by returning
 # ls::Result<T>, with the one operation that can genuinely fail at runtime
 # (raster allocation) catching for itself.
+# Determinism also depends on the floating-point contract. Left to their
+# defaults, GCC and Clang will fuse a*b+c into an FMA, and MSVC contracts under
+# its own rules; the same source then does different arithmetic per compiler and
+# the golden hashes diverge. /fp:precise and -ffp-contract=off pin it. Fast-math
+# is never acceptable here, at any optimisation level.
 if (MSVC)
-    target_compile_options(livesprite PRIVATE /W4 /WX /GR-)
+    target_compile_options(livesprite PRIVATE /W4 /WX /GR- /fp:precise)
 else()
-    target_compile_options(livesprite PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-rtti)
+    target_compile_options(livesprite PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -fno-rtti -ffp-contract=off)
 endif()
 
 option(LS_BUILD_TESTBED "Build the engine testbed gallery tool" ON)
@@ -93,6 +99,12 @@ if (LS_BUILD_TESTS)
     add_executable(livesprite_package_tests tests/package_tests.cpp)
     target_link_libraries(livesprite_package_tests PRIVATE livesprite)
     add_test(NAME livesprite_package COMMAND livesprite_package_tests)
+
+    # The determinism suite reaches into src/ for the maths kernels it checks.
+    add_executable(livesprite_determinism_tests tests/determinism_tests.cpp)
+    target_link_libraries(livesprite_determinism_tests PRIVATE livesprite)
+    target_include_directories(livesprite_determinism_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME livesprite_determinism COMMAND livesprite_determinism_tests)
 
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)
