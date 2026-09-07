@@ -183,6 +183,30 @@ struct PluginRegistry {
 };
 
 // ---------------------------------------------------------------------------
+// A captured document: every entity belonging to it, copied out whole.
+// ---------------------------------------------------------------------------
+
+struct DocumentState {
+    DocumentId id;
+    DocumentData document;
+    std::map<uint64_t, SpriteData>    sprites;
+    std::map<uint64_t, LayerData>     layers;
+    std::map<uint64_t, GroupData>     groups;
+    std::map<uint64_t, GeometryData>  geometry;
+    std::map<uint64_t, RegionData>    regions;
+    std::map<uint64_t, OperationData> operations;
+    std::map<uint64_t, PaletteData>   palettes;
+    std::map<uint64_t, RampData>      ramps;
+    std::map<uint64_t, PatternData>   patterns;
+    std::map<uint64_t, PivotData>     pivots;
+    std::map<uint64_t, SocketData>    sockets;
+    std::map<uint64_t, BoundaryData>  boundaries;
+    std::map<uint64_t, std::map<std::string, std::string>> metadata;
+    std::map<uint64_t, std::string>   unknownFields;
+    uint64_t nextId = 1;
+};
+
+// ---------------------------------------------------------------------------
 // LSContext::Impl — all engine state
 // ---------------------------------------------------------------------------
 
@@ -222,6 +246,14 @@ struct LSContext::Impl {
     // document root) so a save from this build never strips them.
     std::map<uint64_t, std::string> unknownFields;
 
+    // App metadata: entity id -> namespaced key -> opaque value. Engine never
+    // parses a value.
+    std::map<uint64_t, std::map<std::string, std::string>> metadata;
+
+    // Everything belonging to one document, used when a restore has to clear
+    // the document before putting the captured state back.
+    void eraseDocumentContents(DocumentId doc);
+
     template<typename IdT>
     IdT mint() { return IdT { nextId++ }; }
 
@@ -260,6 +292,10 @@ struct LSContext::Impl {
 
     // --- dependency graph (implemented in ls_dependency.cpp) ---------------
     void addDependencyEdge(uint64_t dependency, uint64_t dependent);
+    // Drop one edge. Unlike clearDependenciesOf this leaves the other edges
+    // touching either entity alone, which matters when something stops reading
+    // one input but is still read by others.
+    void removeDependencyEdge(uint64_t dependency, uint64_t dependent);
     void clearDependenciesOf(uint64_t dependent);
     void registerOperationDependencies(OperationId id);
     void markDirtyInternal(uint64_t entityId);

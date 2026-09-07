@@ -298,6 +298,27 @@ using Instruction = std::variant<
     DetachInstruction
 >;
 
+// A whole-document state capture. Restoring one puts every id back exactly as
+// it was, which is what an editor needs: an undo that renumbered entities would
+// invalidate every handle the interface is holding.
+//
+// This is an in-memory capture, not a file. An editor takes one per action, so
+// it copies engine state directly rather than going through the save format,
+// which is orders of magnitude slower. Use serializeDocument for anything that
+// has to outlive the session.
+struct DocumentState;
+
+struct DocumentSnapshot {
+    std::shared_ptr<const DocumentState> state;
+    bool valid() const { return state != nullptr; }
+};
+
+// Limits on app metadata. They exist because a document travels: an unbounded
+// side channel is a denial of service on whoever opens the file next.
+constexpr size_t kMetadataMaxKeyLength   = 128;
+constexpr size_t kMetadataMaxValueLength = 64 * 1024;
+constexpr size_t kMetadataMaxPerEntity   = 64;
+
 struct CacheStats {
     size_t entries      = 0;
     size_t hits         = 0;
@@ -640,6 +661,46 @@ public:
     Result<CompileResult> renderFrame(SpriteId root,
                                       const std::vector<Instruction>& instructions,
                                       const CompileProfile& profile);
+
+    // =======================================================================
+    // Editing support
+    // =======================================================================
+
+    // Capture and restore document state with ids intact. This is the
+    // foundation an app builds undo on: the engine holds no history of its own,
+    // it only makes a moment recoverable.
+    Result<DocumentSnapshot> snapshotDocumentState(DocumentId doc) const;
+    VoidResult               restoreDocumentState(DocumentId doc, const DocumentSnapshot& snapshot);
+
+    // Regions can be edited in place, so a pencil accumulates into the region
+    // it is drawing rather than leaving one region and one operation per
+    // stroke. A region edited by hand stops tracking the geometry it came from.
+    VoidResult setRegionIntervals(RegionId region, const IntervalSet& intervals);
+    VoidResult addPixelsToRegion(RegionId region, const PixelRegionDesc& desc);
+    VoidResult erasePixelsFromRegion(RegionId region, const std::vector<Vec2i>& pixels);
+
+    // ---------------------------------------------------------------------
+    // App metadata
+    //
+    // Space for data the engine does not understand: which frame an app thinks
+    // a sprite is, what a layer is called in a panel, whatever an app needs to
+    // keep with the document rather than beside it.
+    //
+    // Three rules make it safe to carry:
+    //   - Keys are namespaced ("fast.frame", "pract.arranger.cell"). Two apps
+    //     writing the same document do not overwrite each other.
+    //   - Values are opaque bytes to the engine. It stores and returns them and
+    //     never parses or executes them.
+    //   - Sizes are capped, because a document is a file that other people open.
+    //
+    // Metadata written by another app is untrusted input. It arrives from
+    // whoever sent the file, so validate it before acting on it, and do not put
+    // anything in it you would not send to a stranger.
+    // ---------------------------------------------------------------------
+    VoidResult setMetadata(uint64_t entityId, std::string_view key, std::string_view value);
+    Result<std::string> getMetadata(uint64_t entityId, std::string_view key) const;
+    VoidResult clearMetadata(uint64_t entityId, std::string_view key);
+    Result<std::vector<std::string>> metadataKeys(uint64_t entityId) const;
 
     // =======================================================================
     // SECTION 16: Dependency and Cache

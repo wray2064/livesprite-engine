@@ -38,6 +38,9 @@ if (LS_BUILD_TESTBED)
     add_executable(livesprite_testbed tools/ls_testbed.cpp)
     target_link_libraries(livesprite_testbed PRIVATE livesprite)
     target_include_directories(livesprite_testbed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+
+    add_executable(livesprite_bench tools/ls_bench.cpp)
+    target_link_libraries(livesprite_bench PRIVATE livesprite)
 endif()
 
 option(LS_BUILD_TESTS "Build engine tests" ON)
@@ -75,6 +78,10 @@ if (LS_BUILD_TESTS)
     add_executable(livesprite_render_tests tests/render_tests.cpp)
     target_link_libraries(livesprite_render_tests PRIVATE livesprite)
     add_test(NAME livesprite_render COMMAND livesprite_render_tests)
+
+    add_executable(livesprite_editing_tests tests/editing_tests.cpp)
+    target_link_libraries(livesprite_editing_tests PRIVATE livesprite)
+    add_test(NAME livesprite_editing COMMAND livesprite_editing_tests)
 
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)

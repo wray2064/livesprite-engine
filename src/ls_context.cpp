@@ -394,6 +394,220 @@ Rect2i LSContext::Impl::spriteContentBounds(SpriteId sprite) const {
     return bounds;
 }
 
+Result<DocumentSnapshot> LSContext::snapshotDocumentState(DocumentId doc) const {
+    const DocumentData* document = impl_->findDocument(doc);
+    if (document == nullptr) {
+        return Result<DocumentSnapshot>::err(LSError::InvalidId);
+    }
+
+    auto state = std::make_shared<DocumentState>();
+    state->id = doc;
+    state->document = *document;
+    state->nextId = impl_->nextId;
+
+    auto captureSide = [&](uint64_t entityId) {
+        auto meta = impl_->metadata.find(entityId);
+        if (meta != impl_->metadata.end()) {
+            state->metadata[entityId] = meta->second;
+        }
+        auto unknown = impl_->unknownFields.find(entityId);
+        if (unknown != impl_->unknownFields.end()) {
+            state->unknownFields[entityId] = unknown->second;
+        }
+    };
+
+    captureSide(doc.value);
+    for (GeometryId id : document->geometry) {
+        if (const GeometryData* data = impl_->findGeometry(id)) { state->geometry[id.value] = *data; }
+        captureSide(id.value);
+    }
+    for (RegionId id : document->regions) {
+        if (const RegionData* data = impl_->findRegion(id)) { state->regions[id.value] = *data; }
+        captureSide(id.value);
+    }
+    for (PaletteId id : document->palettes) {
+        if (const PaletteData* data = impl_->findPalette(id)) { state->palettes[id.value] = *data; }
+        captureSide(id.value);
+    }
+    for (RampId id : document->ramps) {
+        if (const RampData* data = impl_->findRamp(id)) { state->ramps[id.value] = *data; }
+        captureSide(id.value);
+    }
+    for (PatternId id : document->patterns) {
+        if (const PatternData* data = impl_->findPattern(id)) { state->patterns[id.value] = *data; }
+        captureSide(id.value);
+    }
+
+    for (SpriteId spriteId : document->sprites) {
+        const SpriteData* sprite = impl_->findSprite(spriteId);
+        if (sprite == nullptr) {
+            continue;
+        }
+        state->sprites[spriteId.value] = *sprite;
+        captureSide(spriteId.value);
+
+        for (PivotId id : sprite->pivots) {
+            if (const PivotData* data = impl_->findPivot(id)) { state->pivots[id.value] = *data; }
+            captureSide(id.value);
+        }
+        for (SocketId id : sprite->sockets) {
+            if (const SocketData* data = impl_->findSocket(id)) { state->sockets[id.value] = *data; }
+            captureSide(id.value);
+        }
+        for (BoundaryId id : sprite->boundaries) {
+            if (const BoundaryData* data = impl_->findBoundary(id)) { state->boundaries[id.value] = *data; }
+            captureSide(id.value);
+        }
+        for (GroupId id : sprite->groups) {
+            if (const GroupData* data = impl_->findGroup(id)) { state->groups[id.value] = *data; }
+            captureSide(id.value);
+        }
+        for (LayerId layerId : sprite->layers) {
+            const LayerData* layer = impl_->findLayer(layerId);
+            if (layer == nullptr) {
+                continue;
+            }
+            state->layers[layerId.value] = *layer;
+            captureSide(layerId.value);
+            for (OperationId opId : layer->operations) {
+                if (const OperationData* data = impl_->findOperation(opId)) {
+                    state->operations[opId.value] = *data;
+                }
+                captureSide(opId.value);
+            }
+        }
+    }
+
+    DocumentSnapshot snapshot;
+    snapshot.state = std::move(state);
+    return Result<DocumentSnapshot>::ok(std::move(snapshot));
+}
+
+VoidResult LSContext::restoreDocumentState(DocumentId doc, const DocumentSnapshot& snapshot) {
+    if (impl_->findDocument(doc) == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (!snapshot.valid()) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    if (snapshot.state->id != doc) {
+        // A snapshot belongs to the document it came from: the ids inside it
+        // are that document's.
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+
+    const DocumentState& state = *snapshot.state;
+    impl_->eraseDocumentContents(doc);
+
+    impl_->documents[doc.value] = state.document;
+    for (const auto& [id, data] : state.geometry)   { impl_->geometry[id] = data; }
+    for (const auto& [id, data] : state.regions)    { impl_->regions[id] = data; }
+    for (const auto& [id, data] : state.palettes)   { impl_->palettes[id] = data; }
+    for (const auto& [id, data] : state.ramps)      { impl_->ramps[id] = data; }
+    for (const auto& [id, data] : state.patterns)   { impl_->patterns[id] = data; }
+    for (const auto& [id, data] : state.sprites)    { impl_->sprites[id] = data; }
+    for (const auto& [id, data] : state.pivots)     { impl_->pivots[id] = data; }
+    for (const auto& [id, data] : state.sockets)    { impl_->sockets[id] = data; }
+    for (const auto& [id, data] : state.boundaries) { impl_->boundaries[id] = data; }
+    for (const auto& [id, data] : state.groups)     { impl_->groups[id] = data; }
+    for (const auto& [id, data] : state.layers)     { impl_->layers[id] = data; }
+    for (const auto& [id, data] : state.operations) { impl_->operations[id] = data; }
+    for (const auto& [id, data] : state.metadata)      { impl_->metadata[id] = data; }
+    for (const auto& [id, data] : state.unknownFields) { impl_->unknownFields[id] = data; }
+
+    // Ids never go backwards, so anything created after the snapshot cannot
+    // collide with what just came back.
+    impl_->nextId = std::max(impl_->nextId, state.nextId);
+
+    // Rebuild the edges the restored entities imply, then dirty the lot.
+    for (const auto& [id, data] : state.regions) {
+        if (data.source.valid()) {
+            impl_->addDependencyEdge(data.source.value, id);
+        }
+    }
+    for (const auto& [id, data] : state.sprites) {
+        impl_->addDependencyEdge(id, doc.value);
+        if (data.palette.valid()) {
+            impl_->addDependencyEdge(data.palette.value, id);
+        }
+        if (data.attached) {
+            if (const SocketData* socket = impl_->findSocket(data.attachment.socket)) {
+                impl_->addDependencyEdge(socket->sprite.value, id);
+            }
+        }
+    }
+    for (const auto& [id, data] : state.layers) {
+        impl_->addDependencyEdge(id, data.sprite.value);
+        if (data.mask.valid()) {
+            impl_->addDependencyEdge(data.mask.value, id);
+        }
+        if (data.clipBase.valid()) {
+            impl_->addDependencyEdge(data.clipBase.value, id);
+        }
+    }
+    for (const auto& [id, data] : state.operations) {
+        (void)data;
+        impl_->registerOperationDependencies(OperationId{id});
+    }
+
+    if (std::find(impl_->documentOrder.begin(), impl_->documentOrder.end(), doc) ==
+        impl_->documentOrder.end()) {
+        impl_->documentOrder.push_back(doc);
+    }
+
+    impl_->markDirtyInternal(doc.value);
+    for (const auto& [id, data] : state.sprites) {
+        (void)data;
+        impl_->markDirtyInternal(id);
+    }
+    ++impl_->resourceRevision;
+    return VoidResult::success();
+}
+
+void LSContext::Impl::eraseDocumentContents(DocumentId doc) {
+    DocumentData* document = findDocument(doc);
+    if (document == nullptr) {
+        return;
+    }
+
+    auto forget = [this](uint64_t entityId) {
+        clearDependenciesOf(entityId);
+        invalidateCacheFor(entityId);
+        metadata.erase(entityId);
+        unknownFields.erase(entityId);
+    };
+
+    for (SpriteId spriteId : document->sprites) {
+        SpriteData* sprite = findSprite(spriteId);
+        if (sprite == nullptr) {
+            continue;
+        }
+        for (LayerId layerId : sprite->layers) {
+            LayerData* layer = findLayer(layerId);
+            if (layer != nullptr) {
+                for (OperationId opId : layer->operations) {
+                    forget(opId.value);
+                    operations.erase(opId.value);
+                }
+            }
+            forget(layerId.value);
+            layers.erase(layerId.value);
+        }
+        for (GroupId id : sprite->groups)        { forget(id.value); groups.erase(id.value); }
+        for (SocketId id : sprite->sockets)      { forget(id.value); sockets.erase(id.value); }
+        for (BoundaryId id : sprite->boundaries) { forget(id.value); boundaries.erase(id.value); }
+        for (PivotId id : sprite->pivots)        { forget(id.value); pivots.erase(id.value); }
+        forget(spriteId.value);
+        sprites.erase(spriteId.value);
+    }
+    for (GeometryId id : document->geometry) { forget(id.value); geometry.erase(id.value); }
+    for (RegionId id : document->regions)    { forget(id.value); regions.erase(id.value); }
+    for (PaletteId id : document->palettes)  { forget(id.value); palettes.erase(id.value); }
+    for (RampId id : document->ramps)        { forget(id.value); ramps.erase(id.value); }
+    for (PatternId id : document->patterns)  { forget(id.value); patterns.erase(id.value); }
+    forget(doc.value);
+}
+
 Result<Mat3f> LSContext::Impl::worldTransformOf(SpriteId sprite) const {
     const SpriteData* data = findSprite(sprite);
     if (data == nullptr) {
@@ -1165,6 +1379,131 @@ Result<RegionId> LSContext::createRegionFromCompiledSnapshot(DocumentId doc, con
         : geom::normalize(snapshot.mask);
     IntervalSet boundary = geom::boundaryOf(coverage);
     return storeRegion(*impl_, doc, std::move(coverage), std::move(boundary), GeometryId::null());
+}
+
+namespace {
+
+// A region edited by hand is no longer a view of its geometry: it has its own
+// shape now, and a later geometry edit must not silently overwrite it.
+void detachRegionFromSource(LSContext::Impl& impl, RegionData& region, RegionId id) {
+    if (region.source.valid()) {
+        // Only the edge from the geometry goes. Everything that reads this
+        // region still has to hear about it changing.
+        impl.removeDependencyEdge(region.source.value, id.value);
+        region.source = GeometryId::null();
+    }
+}
+
+} // namespace
+
+VoidResult LSContext::setRegionIntervals(RegionId id, const IntervalSet& intervals) {
+    RegionData* data = impl_->findRegion(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    detachRegionFromSource(*impl_, *data, id);
+    data->coverage = geom::normalize(intervals);
+    data->boundary = geom::boundaryOf(data->coverage);
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::addPixelsToRegion(RegionId id, const PixelRegionDesc& desc) {
+    RegionData* data = impl_->findRegion(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    detachRegionFromSource(*impl_, *data, id);
+
+    // The same closing rules a fresh authored region gets, then merged in: a
+    // second stroke can close a shape the first one left open.
+    geom::PixelRegionResult built = geom::buildPixelRegion(desc);
+    data->coverage = geom::unionSets(data->coverage, built.coverage);
+    data->boundary = geom::unionSets(data->boundary, built.boundary);
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::erasePixelsFromRegion(RegionId id, const std::vector<Vec2i>& pixels) {
+    RegionData* data = impl_->findRegion(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    detachRegionFromSource(*impl_, *data, id);
+
+    IntervalSet removal;
+    for (Vec2i pixel : pixels) {
+        removal.intervals.push_back({ pixel.y, pixel.x, pixel.x + 1 });
+    }
+    removal = geom::normalize(std::move(removal));
+    data->coverage = geom::subtractSets(data->coverage, removal);
+    data->boundary = geom::subtractSets(data->boundary, removal);
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
+
+// --- app metadata ----------------------------------------------------------
+
+VoidResult LSContext::setMetadata(uint64_t entityId, std::string_view key,
+                                  std::string_view value) {
+    if (entityId == 0) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    // A key has to name its owner, so two apps sharing a document cannot
+    // silently overwrite one another.
+    if (key.empty() || key.size() > kMetadataMaxKeyLength ||
+        key.find('.') == std::string_view::npos ||
+        key.front() == '.' || key.back() == '.') {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    if (value.size() > kMetadataMaxValueLength) {
+        return VoidResult::err(LSError::OutOfBounds);
+    }
+
+    auto& entries = impl_->metadata[entityId];
+    if (entries.find(std::string(key)) == entries.end() &&
+        entries.size() >= kMetadataMaxPerEntity) {
+        return VoidResult::err(LSError::OutOfBounds);
+    }
+    entries[std::string(key)] = std::string(value);
+    return VoidResult::success();
+}
+
+Result<std::string> LSContext::getMetadata(uint64_t entityId, std::string_view key) const {
+    auto entity = impl_->metadata.find(entityId);
+    if (entity == impl_->metadata.end()) {
+        return Result<std::string>::err(LSError::InvalidId);
+    }
+    auto entry = entity->second.find(std::string(key));
+    if (entry == entity->second.end()) {
+        return Result<std::string>::err(LSError::InvalidParameter);
+    }
+    return Result<std::string>::ok(entry->second);
+}
+
+VoidResult LSContext::clearMetadata(uint64_t entityId, std::string_view key) {
+    auto entity = impl_->metadata.find(entityId);
+    if (entity == impl_->metadata.end()) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    entity->second.erase(std::string(key));
+    if (entity->second.empty()) {
+        impl_->metadata.erase(entity);
+    }
+    return VoidResult::success();
+}
+
+Result<std::vector<std::string>> LSContext::metadataKeys(uint64_t entityId) const {
+    std::vector<std::string> keys;
+    auto entity = impl_->metadata.find(entityId);
+    if (entity == impl_->metadata.end()) {
+        return Result<std::vector<std::string>>::ok(keys);
+    }
+    for (const auto& [key, value] : entity->second) {
+        (void)value;
+        keys.push_back(key);
+    }
+    return Result<std::vector<std::string>>::ok(std::move(keys));
 }
 
 VoidResult LSContext::deleteRegion(RegionId id) {

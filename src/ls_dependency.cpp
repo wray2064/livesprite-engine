@@ -21,6 +21,23 @@ void LSContext::Impl::addDependencyEdge(uint64_t dependency, uint64_t dependent)
     graph.dependencies[dependent].insert(dependency);
 }
 
+void LSContext::Impl::removeDependencyEdge(uint64_t dependency, uint64_t dependent) {
+    auto dependents = graph.dependents.find(dependency);
+    if (dependents != graph.dependents.end()) {
+        dependents->second.erase(dependent);
+        if (dependents->second.empty()) {
+            graph.dependents.erase(dependents);
+        }
+    }
+    auto dependencies = graph.dependencies.find(dependent);
+    if (dependencies != graph.dependencies.end()) {
+        dependencies->second.erase(dependency);
+        if (dependencies->second.empty()) {
+            graph.dependencies.erase(dependencies);
+        }
+    }
+}
+
 void LSContext::Impl::clearDependenciesOf(uint64_t dependent) {
     auto it = graph.dependencies.find(dependent);
     if (it != graph.dependencies.end()) {

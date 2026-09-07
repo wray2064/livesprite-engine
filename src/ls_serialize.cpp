@@ -15,6 +15,7 @@
 #include "ls_reflect.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 #include <type_traits>
 
@@ -773,6 +774,52 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
     }
     root["sprites"] = std::move(spriteArray);
 
+    // App metadata for everything in this document. Values are opaque: the
+    // engine writes back exactly what it was handed.
+    json::Value metadata = json::Value::object();
+    auto includeMetadata = [&](uint64_t entityId) {
+        auto entry = impl.metadata.find(entityId);
+        if (entry == impl.metadata.end() || entry->second.empty()) {
+            return;
+        }
+        json::Value entity = json::Value::object();
+        for (const auto& [key, value] : entry->second) {
+            entity[key] = enc(value);
+        }
+        metadata[std::to_string(entityId)] = std::move(entity);
+    };
+
+    includeMetadata(docId.value);
+    for (GeometryId id : doc.geometry)  { includeMetadata(id.value); }
+    for (RegionId id : doc.regions)     { includeMetadata(id.value); }
+    for (PaletteId id : doc.palettes)   { includeMetadata(id.value); }
+    for (RampId id : doc.ramps)         { includeMetadata(id.value); }
+    for (PatternId id : doc.patterns)   { includeMetadata(id.value); }
+    for (SpriteId spriteId : sprites) {
+        includeMetadata(spriteId.value);
+        const SpriteData* sprite = impl.findSprite(spriteId);
+        if (sprite == nullptr) {
+            continue;
+        }
+        for (SocketId id : sprite->sockets)      { includeMetadata(id.value); }
+        for (BoundaryId id : sprite->boundaries) { includeMetadata(id.value); }
+        for (PivotId id : sprite->pivots)        { includeMetadata(id.value); }
+        for (GroupId id : sprite->groups)        { includeMetadata(id.value); }
+        for (LayerId layerId : sprite->layers) {
+            includeMetadata(layerId.value);
+            const LayerData* layer = impl.findLayer(layerId);
+            if (layer == nullptr) {
+                continue;
+            }
+            for (OperationId id : layer->operations) {
+                includeMetadata(id.value);
+            }
+        }
+    }
+    if (!metadata.members().empty()) {
+        root["metadata"] = std::move(metadata);
+    }
+
     auto unknown = impl.unknownFields.find(docId.value);
     if (unknown != impl.unknownFields.end()) {
         mergeUnknown(root, unknown->second);
@@ -866,7 +913,8 @@ namespace {
 // Shared loader for documents and sprites. Returns the new document id and the
 // ids of the sprites it created, in file order.
 Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& data,
-                                std::vector<SpriteId>* createdSprites) {
+                                std::vector<SpriteId>* createdSprites,
+                                bool preserveIds = false) {
     if ((LS_ENGINE_VERSION >> 16) < (data.engineVersion >> 16)) {
         // A newer major version can change the meaning of existing fields.
         return Result<DocumentId>::err(LSError::VersionMismatch);
@@ -892,8 +940,15 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
     collectIds(root, fileIds);
     std::map<uint64_t, uint64_t> remap;
     for (uint64_t fileId : fileIds) {
-        if (fileId != 0 && remap.find(fileId) == remap.end()) {
-            remap[fileId] = impl.nextId++;
+        if (fileId == 0 || remap.find(fileId) != remap.end()) {
+            continue;
+        }
+        // Restoring a snapshot puts the ids back as they were, so every handle
+        // the caller is holding still points at the same thing. Loading a file
+        // mints fresh ones, so two documents can be open at once.
+        remap[fileId] = preserveIds ? fileId : impl.nextId++;
+        if (preserveIds) {
+            impl.nextId = std::max(impl.nextId, fileId + 1);
         }
     }
     DecodeContext ctx;
@@ -934,7 +989,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
     {
         std::set<std::string> consumed {
             "format", "engineVersion", "document", "geometry", "regions",
-            "palettes", "ramps", "patterns", "sprites"
+            "palettes", "ramps", "patterns", "sprites", "metadata"
         };
         const std::string unknown = collectUnknown(root, consumed);
         if (!unknown.empty()) {
@@ -1268,6 +1323,29 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             impl.addDependencyEdge(spriteId, docId);
             if (createdSprites != nullptr) {
                 createdSprites->push_back(SpriteId{spriteId});
+            }
+        }
+    }
+
+    if (const json::Value* metadata = root.find("metadata")) {
+        for (const auto& [entityText, entity] : metadata->members()) {
+            if (!entity.isObject()) {
+                continue;
+            }
+            const uint64_t fileId = std::strtoull(entityText.c_str(), nullptr, 10);
+            const uint64_t owner = ctx.mapId(fileId);
+            if (owner == 0) {
+                continue;   // metadata for an entity this file no longer has
+            }
+            for (const auto& [key, value] : entity.members()) {
+                if (!value.isString() || key.size() > kMetadataMaxKeyLength ||
+                    value.asString().size() > kMetadataMaxValueLength) {
+                    continue;   // a value outside the limits is dropped, not trusted
+                }
+                auto& entries = impl.metadata[owner];
+                if (entries.size() < kMetadataMaxPerEntity || entries.count(key) != 0) {
+                    entries[key] = value.asString();
+                }
             }
         }
     }
