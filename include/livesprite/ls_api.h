@@ -177,6 +177,18 @@ struct LayerInfo {
     std::vector<OperationId> operations;    // in order
 };
 
+// What a document contains. This is how an application finds its way around a
+// document it did not build -- one it has just loaded from a file, where every
+// id was minted fresh by the reader and none of the caller's old handles apply.
+struct DocumentInfo {
+    DocumentId              id;
+    std::string             name;
+    uint32_t                canvasWidth  = 0;
+    uint32_t                canvasHeight = 0;
+    PaletteId               palette;        // null = no document palette bound
+    std::vector<SpriteId>   sprites;
+};
+
 struct SpriteInfo {
     SpriteId                id;
     PivotId                 pivot;
@@ -399,6 +411,7 @@ public:
     Result<DocumentId>  createDocument(const DocumentDesc& desc = {});
     VoidResult          deleteDocument(DocumentId doc);
     Result<Vec2i>       getCanvasSize(DocumentId doc) const;
+    Result<DocumentInfo> getDocumentInfo(DocumentId doc) const;
     VoidResult          setCanvasSize(DocumentId doc, uint32_t width, uint32_t height);
     std::vector<DocumentId> documents() const;
 

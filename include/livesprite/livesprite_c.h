@@ -161,6 +161,15 @@ LS_C_API ls_error ls_document_destroy(ls_context* ctx, ls_id document);
 LS_C_API ls_error ls_document_canvas(ls_context* ctx, ls_id document,
                                      uint32_t* out_width, uint32_t* out_height);
 
+/* What a document contains. The way to find your way around a document you did
+ * not build -- one just read from a file, where every id was minted fresh. */
+LS_C_API ls_error ls_document_sprite_count(ls_context* ctx, ls_id document,
+                                           size_t* out_count);
+LS_C_API ls_error ls_document_sprite_at(ls_context* ctx, ls_id document, size_t index,
+                                        ls_id* out_sprite);
+LS_C_API ls_error ls_document_name(ls_context* ctx, ls_id document,
+                                   char* buffer, size_t buffer_size, size_t* out_needed);
+
 /* ------------------------------------------------------- sprites & layers -- */
 
 LS_C_API ls_error ls_sprite_create(ls_context* ctx, ls_id document, ls_id* out_sprite);

@@ -790,6 +790,21 @@ Result<Vec2i> LSContext::getCanvasSize(DocumentId doc) const {
                                     static_cast<int32_t>(data->canvasHeight) });
 }
 
+Result<DocumentInfo> LSContext::getDocumentInfo(DocumentId doc) const {
+    const DocumentData* data = impl_->findDocument(doc);
+    if (data == nullptr) {
+        return Result<DocumentInfo>::err(LSError::InvalidId);
+    }
+    DocumentInfo info;
+    info.id = doc;
+    info.name = data->name;
+    info.canvasWidth = data->canvasWidth;
+    info.canvasHeight = data->canvasHeight;
+    info.palette = data->palette;
+    info.sprites = data->sprites;
+    return Result<DocumentInfo>::ok(std::move(info));
+}
+
 VoidResult LSContext::setCanvasSize(DocumentId doc, uint32_t width, uint32_t height) {
     DocumentData* data = impl_->findDocument(doc);
     if (data == nullptr) {

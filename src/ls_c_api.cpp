@@ -246,6 +246,48 @@ ls_error ls_document_canvas(ls_context* ctx, ls_id document,
     return LS_OK;
 }
 
+ls_error ls_document_sprite_count(ls_context* ctx, ls_id document, size_t* out_count) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_count != nullptr);
+    return guarded([&] {
+        auto info = engine.getDocumentInfo(asId<DocumentId>(document));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        *out_count = info.value.sprites.size();
+        return static_cast<int32_t>(LS_OK);
+    });
+}
+
+ls_error ls_document_sprite_at(ls_context* ctx, ls_id document, size_t index,
+                               ls_id* out_sprite) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_sprite != nullptr);
+    return guarded([&] {
+        auto info = engine.getDocumentInfo(asId<DocumentId>(document));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        if (index >= info.value.sprites.size()) {
+            return static_cast<int32_t>(LS_ERROR_OUT_OF_BOUNDS);
+        }
+        *out_sprite = info.value.sprites[index].value;
+        return static_cast<int32_t>(LS_OK);
+    });
+}
+
+ls_error ls_document_name(ls_context* ctx, ls_id document,
+                          char* buffer, size_t buffer_size, size_t* out_needed) {
+    LS_C_CONTEXT(ctx);
+    return guarded([&] {
+        auto info = engine.getDocumentInfo(asId<DocumentId>(document));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        return copyOut(info.value.name, buffer, buffer_size, out_needed);
+    });
+}
+
 // -------------------------------------------------------- sprites & layers ----
 
 ls_error ls_sprite_create(ls_context* ctx, ls_id document, ls_id* out_sprite) {

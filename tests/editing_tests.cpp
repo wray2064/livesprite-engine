@@ -261,7 +261,47 @@ void testMetadataTravelsWithTheDocument() {
 
 } // namespace
 
+// A document that arrives from a file hands back no usable ids: the reader mints
+// fresh ones. Without a way to enumerate what it contains, an application could
+// open a file and then have no way to display it.
+void testLoadedDocumentIsNavigable() {
+    auto ctx = LSContext::create();
+
+    const DocumentId doc = ctx->createDocument({"navigable", 16, 16}).value;
+    const SpriteId first = ctx->createSprite(doc).value;
+    const SpriteId second = ctx->createSprite(doc).value;
+    ctx->createLayer(first, {"a"});
+    ctx->createLayer(second, {"b"});
+
+    auto info = ctx->getDocumentInfo(doc);
+    LS_REQUIRE(info.ok());
+    LS_CHECK(info.value.name == "navigable");
+    LS_CHECK(info.value.canvasWidth == 16);
+    LS_CHECK(info.value.sprites.size() == 2);
+
+    auto package = ctx->writePackage(doc, {});
+    LS_REQUIRE(package.ok());
+
+    // A second context, holding none of the ids above.
+    auto reader = LSContext::create();
+    auto loaded = reader->loadPackage(package.value, nullptr);
+    LS_REQUIRE(loaded.ok());
+
+    auto reloaded = reader->getDocumentInfo(loaded.value);
+    LS_REQUIRE(reloaded.ok());
+    LS_CHECK(reloaded.value.sprites.size() == 2);
+    LS_CHECK(reloaded.value.canvasWidth == 16);
+
+    // The enumerated ids are real handles, not just numbers.
+    for (SpriteId sprite : reloaded.value.sprites) {
+        LS_CHECK(reader->getSpriteInfo(sprite).ok());
+    }
+
+    LS_CHECK(ctx->getDocumentInfo(DocumentId{}).fail());
+}
+
 int main() {
+    testLoadedDocumentIsNavigable();
     testSnapshotRestoreKeepsHandles();
     testSnapshotRefusesMismatches();
     testRegionEditing();
