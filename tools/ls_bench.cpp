@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_bench.cpp — a baseline, so "fast enough for a live canvas" is a number
 // rather than a hope.
 //

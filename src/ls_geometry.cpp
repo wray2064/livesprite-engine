@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_geometry.cpp — geometry math for the LiveSprite Engine.
 //
 // Everything here is a pure function over value types. No engine state, no IDs,

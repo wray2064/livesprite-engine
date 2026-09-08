@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // context_tests.cpp — entity CRUD, regions, operations, palettes, patterns,
 // anchors, and dirty propagation through the dependency graph.
 

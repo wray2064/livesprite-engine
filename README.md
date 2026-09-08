@@ -74,6 +74,8 @@ than asking you to compare by eye.
 | [Operations](docs/operations.md) | The catalogue: all 39 operation types and their parameters |
 | [File format](docs/file-format.md) | The document, the package container, metadata, versioning |
 | [Performance and limits](docs/performance-and-limits.md) | Measured numbers, and what the engine does not do |
+| [Licensing](LICENSING.md) | What licence applies where, and the reasoning |
+| [Contributing](CONTRIBUTING.md) | The licence grant, the determinism rules, adding an operation |
 | [Engine spec](LIVESPRITE_ENGINE_SPEC.md) | The implementation contract |
 | [Architecture](Livesprite%20architecture.txt) | The wider design: engine, Fast, Pract |
 
@@ -97,3 +99,21 @@ and the C ABI.
 
 Known limits are listed in [performance and limits](docs/performance-and-limits.md)
 rather than left for you to discover.
+
+## Licence
+
+The engine is under the **Business Source License 1.1**, and each version becomes
+Apache-2.0 four years after it is published. In short:
+
+- **Building a sprite editor on it, including a commercial one, is explicitly
+  allowed** — even one that competes with ours. That is the point.
+- **Offering it to others as a sprite engine, library or service is not.**
+- **Embedding it at run time in a shipped game is reserved** and available under
+  a separate commercial licence. Authoring, converting and exporting are free.
+
+`include/livesprite/livesprite_c.h`, the examples and the docs are Apache-2.0, so
+a binding author never has to think about licence compatibility to copy a
+declaration. Every file carries an `SPDX-License-Identifier`.
+
+The reasoning behind the split — including why a blanket "no competing products"
+clause would have been a mistake here — is in [LICENSING.md](LICENSING.md).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_instructions.cpp — addressable parameters and live frame application.
 //
 // The engine has no idea what a keyframe is. What it provides is the surface an

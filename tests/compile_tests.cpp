@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // compile_tests.cpp — the compilation contract: determinism, non-destructive
 // transforms, stable dither spaces, compositing, policies, and caching.
 

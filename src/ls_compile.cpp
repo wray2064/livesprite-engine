@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_compile.cpp — raster helpers and the compilation pipeline.
 //
 // The pipeline follows the spec order:

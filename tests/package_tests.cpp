@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // package_tests.cpp — the container. Half of this is a round trip; the other
 // half hands the reader files a hostile writer might send, because this is the
 // one part of the engine that parses somebody else's bytes.

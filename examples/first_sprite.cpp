@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 the LiveSprite authors
 // first_sprite.cpp — the shortest path from nothing to a compiled sprite.
 //
 // This file is the worked example the documentation quotes, and it is built and

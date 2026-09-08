@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_serialize.cpp — the canonical LiveSprite document format.
 //
 // The serialized form is the source of truth for a sprite. Three rules hold it

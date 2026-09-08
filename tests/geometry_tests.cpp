@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // geometry_tests.cpp — interval sets, boolean ops, morphology, primitives,
 // contours, and the authored-pixel region rules.
 

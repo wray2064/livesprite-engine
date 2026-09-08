@@ -1,0 +1,62 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:             <YOUR LEGAL NAME OR COMPANY>
+
+Licensed Work:        LiveSprite Engine
+                      The Licensed Work is (c) 2026 <YOUR LEGAL NAME OR COMPANY>
+
+Additional Use Grant: You may use, modify and distribute the Licensed Work, and
+                      distribute works that link or embed it, for the purpose of
+                      creating, editing, converting, previewing and exporting
+                      sprite artwork, and for integrating such tooling with game
+                      engines and asset pipelines. This grant covers commercial
+                      products and paid distribution.
+
+                      This grant does not permit either of the following.
+
+                      (a) Offering the Licensed Work, or a derivative of it, to
+                          third parties as a sprite compilation engine, library,
+                          software development kit, or hosted service, whether
+                          standalone or as the substantive basis of such an
+                          offering.
+
+                      (b) Embedding the Licensed Work in a video game, virtual
+                          world, or other interactive application distributed to
+                          end users, where the Licensed Work executes at run time
+                          on the end user's device or on a server acting on their
+                          behalf. Run-time embedding rights are reserved and are
+                          available under a separate commercial licence.
+
+Change Date:          2030-09-06
+
+Change License:       Apache License, Version 2.0
+
+For information about alternative licensing arrangements for the Licensed Work,
+including run-time embedding, please contact <YOUR CONTACT ADDRESS>.
+
+-----------------------------------------------------------------------------
+
+  !!  THIS FILE IS NOT YET A VALID LICENSE.  !!
+
+  The parameters above are complete and are the part specific to this project.
+  The canonical Business Source License 1.1 terms -- the "Notice", "Terms" and
+  "Covenants of Licensor" sections -- must be appended below this marker,
+  verbatim, from the authoritative source:
+
+      https://mariadb.com/bsl11/
+
+  MariaDB grants permission to use the licence text for this purpose, provided
+  the Covenants of Licensor are met; the parameters above are written to meet
+  them (Apache-2.0 is compatible with GPL-3.0, an accepted Change License; an
+  Additional Use Grant is given rather than "None"; a Change Date is set; and
+  the licence text itself is not modified).
+
+  Until that text is appended, this repository has no effective licence, which
+  means all rights are reserved and nobody may use it. That is a safe state to
+  push privately in. It is not a safe state to make public.
+
+  Remove this marker once the text is in place.
+
+-----------------------------------------------------------------------------

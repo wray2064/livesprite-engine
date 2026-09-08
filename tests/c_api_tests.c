@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 /* c_api_tests.c — the C ABI, exercised from actual C.
  *
  * This file is compiled by the C compiler, not the C++ one. That is the whole

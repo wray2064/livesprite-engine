@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_testbed.cpp — render the engine, not a lookalike.
 //
 // Every panel in the gallery this produces comes out of ls::LSContext: the

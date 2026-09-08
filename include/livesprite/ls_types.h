@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 #pragma once
 // ls_types.h — Core types, IDs, Result<T>, enums, and math primitives
 // LiveSprite Engine — do not include application logic here.

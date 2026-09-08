@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_json.cpp — dump and parse for the serializer JSON value.
 
 #include "ls_json.h"

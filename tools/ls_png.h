@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 #pragma once
 // ls_png.h — a dependency-free PNG writer for the testbed.
 //

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // determinism_tests.cpp — the promise that the same document produces the same
 // bytes everywhere.
 //

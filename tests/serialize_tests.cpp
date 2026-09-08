@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // serialize_tests.cpp — the save file contract: lossless round trip, byte
 // determinism, forward compatibility, and version migration.
 

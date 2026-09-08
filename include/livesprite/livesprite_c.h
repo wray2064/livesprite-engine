@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 the LiveSprite authors
 #ifndef LIVESPRITE_C_H
 #define LIVESPRITE_C_H
 

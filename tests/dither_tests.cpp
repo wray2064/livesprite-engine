@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // dither_tests.cpp — the dither contract: gradients built from dithered
 // colour, the prebaked pattern library plus imported tiles, and the three
 // anchor modes (local, global, fixed) under motion.

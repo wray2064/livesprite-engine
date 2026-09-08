@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_package.cpp — the LiveSprite container.
 //
 // A package is a ZIP holding the engine document plus whatever entries an app

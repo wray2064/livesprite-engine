@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 #pragma once
 // Minimal check harness. No framework dependency: the engine has none, and the
 // tests should not add one.

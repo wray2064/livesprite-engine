@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_c_api.cpp — the C ABI, implemented as a translation layer over the C++ API.
 //
 // Nothing here knows how the engine works. Every function converts C arguments

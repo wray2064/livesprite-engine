@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 #pragma once
 // livesprite.h — master include for the LiveSprite Engine.
 // Include this and you get the whole public API.

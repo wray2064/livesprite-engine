@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 the LiveSprite authors
 """Loads the LiveSprite C ABI from Python and compiles a sprite with it.
 
 The C header exists so that something which is not C++ can drive the engine.

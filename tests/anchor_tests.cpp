@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // anchor_tests.cpp — pivots, sockets, and the attachment graph: the maths that
 // makes one sprite hang off another and follow it.
 

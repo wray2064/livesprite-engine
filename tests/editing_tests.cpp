@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // editing_tests.cpp — what an editor needs underneath it: an undo that keeps
 // its handles, regions that accumulate a stroke at a time, and somewhere to
 // keep app data that travels with the document.

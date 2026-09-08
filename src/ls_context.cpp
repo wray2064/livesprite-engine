@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_context.cpp — LSContext storage and CRUD.
 //
 // Documents, sprites, layers, groups, geometry, regions, operations, palettes,

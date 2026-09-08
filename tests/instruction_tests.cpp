@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // instruction_tests.cpp — the surface an animation system drives from above.
 //
 // The engine knows nothing about time. What these tests pin is what a timeline,

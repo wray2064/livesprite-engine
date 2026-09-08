@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // render_tests.cpp — the controls that used to be stored and ignored: stroke
 // joins, caps, snapping and patterns; groups as compositing units; and the
 // resolution policies.

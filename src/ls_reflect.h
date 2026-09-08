@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 #pragma once
 // ls_reflect.h — one field table per operation, shared by everything that needs
 // to walk an operation generically.

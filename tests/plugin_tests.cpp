@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // plugin_tests.cpp — the extension surface: registered pattern types, fill and
 // transform resolvers, compile policies, and the outline post-processing ops.
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 the LiveSprite authors
 // ls_dependency.cpp — dependency graph, dirty propagation, and compile cache.
 //
 // Edge direction: dependencies[dependent] contains what it reads;
