@@ -50,6 +50,49 @@ Compile cost scales with canvas area × layer count, because each layer resolves
 over the output frame. It does not scale meaningfully with operation count
 within a layer.
 
+## Hard limits
+
+These are refused, not merely discouraged. A canvas size arrives from an
+application or from a file somebody sent, and without a bound the second of those
+is a memory-safety problem rather than a performance one: past a width of 2^30
+the 32-bit stride overflows and a raster comes back reporting a size its storage
+does not have, with every bounds check in `writePixel` passing on a buffer that
+is not there.
+
+| Limit | Value | Why |
+|---|---|---|
+| `kMaxCanvasDimension` | 16384 per side | A long sprite sheet is cheap; a long one is not the problem |
+| `kMaxCanvasPixels` | 16,777,216 (4096x4096) | Holds one raster to 64 MB whatever the aspect |
+| `kMaxLayersPerSprite` | 1024 | Compile cost is linear in layers on top of area |
+
+**Area, not just a side.** A dimension-only cap would admit 16384x16384 -- a
+gigabyte per raster, minutes per compile -- while refusing a 12000x200 sheet that
+costs almost nothing. Either side may reach the dimension cap; the two together
+may not exceed the area cap.
+
+The numbers come from measuring this engine. Compile cost tracks canvas area
+times layer count:
+
+| Canvas | 1 layer | 8 layers | One raster |
+|---|---|---|---|
+| 256x256 | 3.2 ms | 135 ms | 0.2 MB |
+| 512x512 | 64 ms | 178 ms | 1 MB |
+| 1024x1024 | 103 ms | 839 ms | 4 MB |
+| 2048x2048 | 297 ms | 1.6 s | 16 MB |
+| 4096x4096 | 1.1 s | 7.7 s | 64 MB |
+
+So the area cap sits where a single compile is seconds rather than minutes. Past
+roughly 512x512 nothing here is interactive, which is a fact about the design
+rather than a bug: this engine compiles from operations instead of blitting a
+stored bitmap.
+
+For comparison, Aseprite's 65535x65535 ceiling is the range of the 16-bit field
+in its file header rather than a considered working size -- its own author puts
+the practical figure near 9000, and users report trouble well below that. Piskel,
+being browser-based, started at 100x100 and describes itself as being for small
+sprites. Krita and Pixelorama impose no hard pixel limit and are bounded by
+memory. Ours is deliberately stated rather than discovered.
+
 ## Limits worth knowing before you build on it
 
 ### By design

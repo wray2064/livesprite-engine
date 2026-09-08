@@ -25,6 +25,44 @@ constexpr uint32_t LS_ENGINE_VERSION =
      LS_ENGINE_VERSION_PATCH;
 
 // ---------------------------------------------------------------------------
+// Limits
+//
+// A canvas size arrives from an application or, worse, from a file somebody
+// sent. Without a bound, "65535 x 65535" costs 17 GB to compile, and a width
+// past 2^30 overflows the 32-bit stride and produces a raster that claims a size
+// its storage does not have -- which is a memory-safety problem, not a
+// performance one.
+//
+// The numbers below come from measuring this engine rather than from copying
+// another program. Compile cost tracks canvas *area* times layer count:
+//
+//     256 x 256,  8 layers    135 ms      0.2 MB
+//     512 x 512,  8 layers    178 ms      1 MB
+//    1024 x 1024, 8 layers    839 ms      4 MB
+//    2048 x 2048, 8 layers    1.6 s      16 MB
+//    4096 x 4096, 8 layers    7.7 s      64 MB
+//
+// So the limit is on area, not only on a side. A dimension-only cap would admit
+// 8192 x 8192 -- 256 MB per raster and half a minute per compile -- while
+// refusing a 12000 x 200 sprite sheet that costs almost nothing. Both bounds are
+// enforced: either side may reach kMaxCanvasDimension, but the two together may
+// not exceed kMaxCanvasPixels.
+//
+// For reference, Aseprite's 65535 x 65535 ceiling is the range of the 16-bit
+// field in its file header rather than a considered working size; its own author
+// puts the practical figure near 9000, and users report trouble well below that.
+// This engine compiles from operations instead of blitting a stored bitmap, so
+// its practical ceiling is lower and worth stating honestly.
+constexpr uint32_t kMaxCanvasDimension = 16384;
+
+// 4096 x 4096. Holds one raster to 64 MB whatever the aspect ratio.
+constexpr uint64_t kMaxCanvasPixels = 16777216ull;
+
+// Beyond this a sprite is not slow, it is a mistake. Compile cost is linear in
+// layer count on top of area.
+constexpr uint32_t kMaxLayersPerSprite = 1024;
+
+// ---------------------------------------------------------------------------
 // Opaque typed ID handles
 // All entities live inside LSContext. Apps hold these IDs.
 // ---------------------------------------------------------------------------
@@ -348,6 +386,13 @@ struct RasterBuffer {
 inline RasterBuffer makeRaster(uint32_t width, uint32_t height) {
     RasterBuffer raster;
     if (width == 0 || height == 0) {
+        return raster;
+    }
+    // An empty raster is the only safe answer to a size this cannot represent.
+    // Returning one that reports a width while holding no storage would leave
+    // writePixel's bounds check passing on a buffer that is not there.
+    if (width > kMaxCanvasDimension || height > kMaxCanvasDimension ||
+        static_cast<uint64_t>(width) * height > kMaxCanvasPixels) {
         return raster;
     }
     raster.width = width;

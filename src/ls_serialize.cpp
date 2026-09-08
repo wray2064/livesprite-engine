@@ -973,7 +973,14 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             impl.unknownFields[docId] = unknown;
         }
     }
-    if (document.canvasWidth == 0 || document.canvasHeight == 0) {
+    // This is the path that matters: the canvas size came out of a file, and the
+    // file came from whoever sent it. A document declaring 65535 x 65535 would
+    // otherwise have the reader hand back something no compile can survive.
+    if (document.canvasWidth == 0 || document.canvasHeight == 0 ||
+        document.canvasWidth > kMaxCanvasDimension ||
+        document.canvasHeight > kMaxCanvasDimension ||
+        static_cast<uint64_t>(document.canvasWidth) * document.canvasHeight >
+            kMaxCanvasPixels) {
         return Result<DocumentId>::err(LSError::DeserializationFailure);
     }
 

@@ -36,6 +36,15 @@ Result<RasterBuffer> allocateRaster(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) {
         return Result<RasterBuffer>::err(LSError::InvalidParameter);
     }
+    // A compile profile carries its own output size, so this is reachable
+    // without going anywhere near a document's canvas. Past 2^30 the stride
+    // below overflows its 32 bits and the raster ends up claiming a size its
+    // storage does not have; well before that, the allocation is one no machine
+    // will satisfy.
+    if (width > kMaxCanvasDimension || height > kMaxCanvasDimension ||
+        static_cast<uint64_t>(width) * height > kMaxCanvasPixels) {
+        return Result<RasterBuffer>::err(LSError::InvalidParameter);
+    }
     RasterBuffer raster;
     raster.width = width;
     raster.height = height;

@@ -743,8 +743,24 @@ uint32_t LSContext::engineVersion() const {
 // SECTION 1: Documents, sprites, layers, groups
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Every route a canvas size can take into the engine goes through this: the API,
+// a resize, and -- the one that matters -- a document read from a file.
+bool canvasSizeIsUsable(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) {
+        return false;
+    }
+    if (width > kMaxCanvasDimension || height > kMaxCanvasDimension) {
+        return false;
+    }
+    return static_cast<uint64_t>(width) * height <= kMaxCanvasPixels;
+}
+
+} // namespace
+
 Result<DocumentId> LSContext::createDocument(const DocumentDesc& desc) {
-    if (desc.canvasWidth == 0 || desc.canvasHeight == 0) {
+    if (!canvasSizeIsUsable(desc.canvasWidth, desc.canvasHeight)) {
         return Result<DocumentId>::err(LSError::InvalidParameter);
     }
     const DocumentId id = impl_->mint<DocumentId>();
@@ -819,7 +835,7 @@ VoidResult LSContext::setCanvasSize(DocumentId doc, uint32_t width, uint32_t hei
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
-    if (width == 0 || height == 0) {
+    if (!canvasSizeIsUsable(width, height)) {
         return VoidResult::err(LSError::InvalidParameter);
     }
     data->canvasWidth = width;

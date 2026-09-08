@@ -184,6 +184,10 @@ if (LS_BUILD_TESTS)
     endif()
     add_test(NAME livesprite_c_api COMMAND livesprite_c_api_tests)
 
+    add_executable(livesprite_limit_tests tests/limit_tests.cpp)
+    target_link_libraries(livesprite_limit_tests PRIVATE livesprite)
+    add_test(NAME livesprite_limits COMMAND livesprite_limit_tests)
+
     add_executable(livesprite_plugin_tests tests/plugin_tests.cpp)
     target_link_libraries(livesprite_plugin_tests PRIVATE livesprite)
     add_test(NAME livesprite_plugin COMMAND livesprite_plugin_tests)
