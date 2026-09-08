@@ -413,6 +413,7 @@ public:
     Result<Vec2i>       getCanvasSize(DocumentId doc) const;
     Result<DocumentInfo> getDocumentInfo(DocumentId doc) const;
     VoidResult          setCanvasSize(DocumentId doc, uint32_t width, uint32_t height);
+    VoidResult          setDocumentName(DocumentId doc, std::string_view name);
     std::vector<DocumentId> documents() const;
 
     Result<SpriteId>    createSprite(DocumentId doc);
@@ -497,6 +498,9 @@ public:
     // =======================================================================
 
     VoidResult  setLayerOrder(SpriteId sprite, const std::vector<LayerId>& orderedLayers);
+    // A name is state like any other: it round-trips through a save, it is shown
+    // in an interface, and an interface that shows a name is asked to change it.
+    VoidResult  setLayerName(LayerId id, std::string_view name);
     VoidResult  setLayerVisibility(LayerId id, bool visible);
     VoidResult  setLayerOpacity(LayerId id, float opacity);
     VoidResult  setLayerBlendMode(LayerId id, BlendMode mode);

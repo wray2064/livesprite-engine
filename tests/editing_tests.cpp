@@ -300,7 +300,48 @@ void testLoadedDocumentIsNavigable() {
     LS_CHECK(ctx->getDocumentInfo(DocumentId{}).fail());
 }
 
+// A name is state: it is shown, it is saved, and an interface that shows it will
+// be asked to change it. It was previously write-once.
+void testNamesCanBeChanged() {
+    auto ctx = LSContext::create();
+    const DocumentId doc = ctx->createDocument({"before", 8, 8}).value;
+    const SpriteId sprite = ctx->createSprite(doc).value;
+    const LayerId layer = ctx->createLayer(sprite, {"layer 1"}).value;
+
+    LS_CHECK(ctx->getLayerInfo(layer).value.name == "layer 1");
+    LS_REQUIRE(ctx->setLayerName(layer, "background").ok());
+    LS_CHECK(ctx->getLayerInfo(layer).value.name == "background");
+
+    LS_CHECK(ctx->getDocumentInfo(doc).value.name == "before");
+    LS_REQUIRE(ctx->setDocumentName(doc, "after").ok());
+    LS_CHECK(ctx->getDocumentInfo(doc).value.name == "after");
+
+    LS_CHECK(ctx->setLayerName(LayerId{}, "nope").fail());
+    LS_CHECK(ctx->setDocumentName(DocumentId{}, "nope").fail());
+
+    // Renaming survives a save, and does not disturb the picture.
+    const GeometryId rect = ctx->createRect(doc, {{1.f, 1.f}, 4.f, 4.f, 0.f}).value;
+    FillSolidOp fill;
+    fill.targetRegion = ctx->createRegionFromGeometry(rect).value;
+    ctx->addOperation(layer, fill);
+
+    auto saved = ctx->serializeDocument(doc);
+    LS_REQUIRE(saved.ok());
+
+    auto reader = LSContext::create();
+    auto loaded = reader->deserializeDocument(saved.value);
+    LS_REQUIRE(loaded.ok());
+    auto info = reader->getDocumentInfo(loaded.value);
+    LS_REQUIRE(info.ok());
+    LS_CHECK(info.value.name == "after");
+    LS_REQUIRE(!info.value.sprites.empty());
+    auto sprites = reader->getSpriteInfo(info.value.sprites.front());
+    LS_REQUIRE(sprites.ok() && !sprites.value.layers.empty());
+    LS_CHECK(reader->getLayerInfo(sprites.value.layers.front()).value.name == "background");
+}
+
 int main() {
+    testNamesCanBeChanged();
     testLoadedDocumentIsNavigable();
     testSnapshotRestoreKeepsHandles();
     testSnapshotRefusesMismatches();

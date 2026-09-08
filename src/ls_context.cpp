@@ -805,6 +805,15 @@ Result<DocumentInfo> LSContext::getDocumentInfo(DocumentId doc) const {
     return Result<DocumentInfo>::ok(std::move(info));
 }
 
+VoidResult LSContext::setDocumentName(DocumentId doc, std::string_view name) {
+    DocumentData* data = impl_->findDocument(doc);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->name = std::string(name);
+    return VoidResult::success();
+}
+
 VoidResult LSContext::setCanvasSize(DocumentId doc, uint32_t width, uint32_t height) {
     DocumentData* data = impl_->findDocument(doc);
     if (data == nullptr) {
@@ -1755,6 +1764,17 @@ VoidResult LSContext::setLayerOrder(SpriteId sprite, const std::vector<LayerId>&
     }
     data->layers = orderedLayers;
     impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::setLayerName(LayerId id, std::string_view name) {
+    LayerData* data = impl_->findLayer(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    // A name reaches the save file but never the pixels, so nothing is dirtied
+    // and no compile is invalidated by renaming.
+    data->desc.name = std::string(name);
     return VoidResult::success();
 }
 

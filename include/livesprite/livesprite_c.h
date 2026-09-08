@@ -178,6 +178,9 @@ LS_C_API ls_error ls_sprite_destroy(ls_context* ctx, ls_id sprite);
 LS_C_API ls_error ls_layer_create(ls_context* ctx, ls_id sprite, const char* name,
                                   ls_id* out_layer);
 LS_C_API ls_error ls_layer_destroy(ls_context* ctx, ls_id layer);
+LS_C_API ls_error ls_layer_set_name(ls_context* ctx, ls_id layer, const char* name);
+LS_C_API ls_error ls_layer_name(ls_context* ctx, ls_id layer,
+                                char* buffer, size_t buffer_size, size_t* out_needed);
 LS_C_API ls_error ls_layer_set_visible(ls_context* ctx, ls_id layer, int visible);
 LS_C_API ls_error ls_layer_set_opacity(ls_context* ctx, ls_id layer, float opacity);
 

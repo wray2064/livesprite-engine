@@ -318,6 +318,26 @@ ls_error ls_layer_destroy(ls_context* ctx, ls_id layer) {
     return toError(engine.deleteLayer(asId<LayerId>(layer)).error);
 }
 
+ls_error ls_layer_set_name(ls_context* ctx, ls_id layer, const char* name) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(name != nullptr);
+    return guarded([&] {
+        return toError(engine.setLayerName(asId<LayerId>(layer), name).error);
+    });
+}
+
+ls_error ls_layer_name(ls_context* ctx, ls_id layer,
+                       char* buffer, size_t buffer_size, size_t* out_needed) {
+    LS_C_CONTEXT(ctx);
+    return guarded([&] {
+        auto info = engine.getLayerInfo(asId<LayerId>(layer));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        return copyOut(info.value.name, buffer, buffer_size, out_needed);
+    });
+}
+
 ls_error ls_layer_set_visible(ls_context* ctx, ls_id layer, int visible) {
     LS_C_CONTEXT(ctx);
     return toError(engine.setLayerVisibility(asId<LayerId>(layer), visible != 0).error);
