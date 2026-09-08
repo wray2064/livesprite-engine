@@ -17,6 +17,23 @@ namespace ls {
 // Entity records
 // ---------------------------------------------------------------------------
 
+// Every route a canvas size can take into the engine goes through this: the API,
+// a resize, and -- the one that matters -- a document read from a file. The
+// ceiling is the engine's; the limits are the application's.
+inline bool canvasSizeIsUsable(uint32_t width, uint32_t height,
+                               const CanvasLimits& limits) {
+    if (width == 0 || height == 0) {
+        return false;
+    }
+    if (width >= kCanvasDimensionCeiling || height >= kCanvasDimensionCeiling) {
+        return false;
+    }
+    if (width > limits.maxDimension || height > limits.maxDimension) {
+        return false;
+    }
+    return static_cast<uint64_t>(width) * height <= limits.maxPixels;
+}
+
 struct DocumentData {
     std::string             name;
     uint32_t                canvasWidth  = 32;
@@ -213,6 +230,8 @@ struct DocumentState {
 // ---------------------------------------------------------------------------
 
 struct LSContext::Impl {
+    CanvasLimits canvasLimits;
+
     uint64_t nextId = 1;
 
     // Bumped whenever a palette, ramp, or pattern changes. Colour resources are
@@ -331,6 +350,7 @@ struct LSContext::Impl {
 
     // --- compile helpers (implemented in ls_compile.cpp) -------------------
     uint64_t hashProfile(const CompileProfile& profile) const;
+    bool profileOutputIsUsable(const CompileProfile& profile) const;
     CompileProfile resolveProfileDefaults(const CompileProfile& profile, DocumentId doc) const;
 };
 

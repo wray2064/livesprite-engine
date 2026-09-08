@@ -743,24 +743,8 @@ uint32_t LSContext::engineVersion() const {
 // SECTION 1: Documents, sprites, layers, groups
 // ---------------------------------------------------------------------------
 
-namespace {
-
-// Every route a canvas size can take into the engine goes through this: the API,
-// a resize, and -- the one that matters -- a document read from a file.
-bool canvasSizeIsUsable(uint32_t width, uint32_t height) {
-    if (width == 0 || height == 0) {
-        return false;
-    }
-    if (width > kMaxCanvasDimension || height > kMaxCanvasDimension) {
-        return false;
-    }
-    return static_cast<uint64_t>(width) * height <= kMaxCanvasPixels;
-}
-
-} // namespace
-
 Result<DocumentId> LSContext::createDocument(const DocumentDesc& desc) {
-    if (!canvasSizeIsUsable(desc.canvasWidth, desc.canvasHeight)) {
+    if (!canvasSizeIsUsable(desc.canvasWidth, desc.canvasHeight, impl_->canvasLimits)) {
         return Result<DocumentId>::err(LSError::InvalidParameter);
     }
     const DocumentId id = impl_->mint<DocumentId>();
@@ -821,6 +805,29 @@ Result<DocumentInfo> LSContext::getDocumentInfo(DocumentId doc) const {
     return Result<DocumentInfo>::ok(std::move(info));
 }
 
+VoidResult LSContext::setCanvasLimits(const CanvasLimits& limits) {
+    // The ceiling is not a policy anyone may raise: past it the engine cannot
+    // describe the raster it would have to build.
+    if (limits.maxDimension == 0 || limits.maxPixels == 0) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    if (limits.maxDimension >= kCanvasDimensionCeiling) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    // A pixel budget larger than the widest square the dimension allows is not
+    // wrong, just unreachable; one that overflows when multiplied out is.
+    if (limits.maxPixels > static_cast<uint64_t>(kCanvasDimensionCeiling) *
+                           kCanvasDimensionCeiling) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    impl_->canvasLimits = limits;
+    return VoidResult::success();
+}
+
+CanvasLimits LSContext::canvasLimits() const {
+    return impl_->canvasLimits;
+}
+
 VoidResult LSContext::setDocumentName(DocumentId doc, std::string_view name) {
     DocumentData* data = impl_->findDocument(doc);
     if (data == nullptr) {
@@ -835,7 +842,7 @@ VoidResult LSContext::setCanvasSize(DocumentId doc, uint32_t width, uint32_t hei
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
-    if (!canvasSizeIsUsable(width, height)) {
+    if (!canvasSizeIsUsable(width, height, impl_->canvasLimits)) {
         return VoidResult::err(LSError::InvalidParameter);
     }
     data->canvasWidth = width;

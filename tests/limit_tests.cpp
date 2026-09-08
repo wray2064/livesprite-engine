@@ -134,6 +134,76 @@ void testAFileCannotDeclareAnAbsurdCanvas() {
     LS_CHECK(honest.ok());
 }
 
+// The point of separating the two: the default is a policy an application may
+// change, while the ceiling is a property of the engine that it may not.
+void testAnApplicationSetsItsOwnPolicy() {
+    auto ctx = LSContext::create();
+
+    LS_CHECK(ctx->canvasLimits().maxPixels == kDefaultMaxCanvasPixels);
+    LS_CHECK(ctx->createDocument({"default", 8192, 8192}).fail());
+
+    // A production tool willing to wait raises it.
+    CanvasLimits generous;
+    generous.maxDimension = 16384;
+    generous.maxPixels = 8192ull * 8192ull;
+    LS_REQUIRE(ctx->setCanvasLimits(generous).ok());
+    LS_CHECK(ctx->canvasLimits().maxPixels == 8192ull * 8192ull);
+    LS_CHECK(ctx->createDocument({"raised", 8192, 8192}).ok());
+
+    // An editor for small sprites tightens it, and the tighter bound applies to
+    // documents it has yet to create.
+    auto small = LSContext::create();
+    CanvasLimits strict;
+    strict.maxDimension = 512;
+    strict.maxPixels = 512ull * 512ull;
+    LS_REQUIRE(small->setCanvasLimits(strict).ok());
+    LS_CHECK(small->createDocument({"fine", 512, 512}).ok());
+    LS_CHECK(small->createDocument({"no", 1024, 1024}).fail());
+
+    // The ceiling is not a policy. No application may raise past what the engine
+    // can represent, whatever it asks for.
+    CanvasLimits absurd;
+    absurd.maxDimension = kCanvasDimensionCeiling;
+    LS_CHECK(ctx->setCanvasLimits(absurd).fail());
+
+    absurd.maxDimension = 0xFFFFFFFFu;
+    LS_CHECK(ctx->setCanvasLimits(absurd).fail());
+
+    CanvasLimits zero;
+    zero.maxDimension = 0;
+    LS_CHECK(ctx->setCanvasLimits(zero).fail());
+
+    // A refused change leaves the previous policy in place.
+    LS_CHECK(ctx->canvasLimits().maxPixels == 8192ull * 8192ull);
+}
+
+// A file is read against the reader's policy, not the writer's, so a strict
+// application is never handed a document it cannot display.
+void testTheReaderUsesTheReadersPolicy() {
+    auto generous = LSContext::create();
+    CanvasLimits wide;
+    wide.maxDimension = 16384;
+    wide.maxPixels = 4096ull * 4096ull;
+    LS_REQUIRE(generous->setCanvasLimits(wide).ok());
+
+    const DocumentId doc = generous->createDocument({"big", 2048, 2048}).value;
+    auto saved = generous->serializeDocument(doc);
+    LS_REQUIRE(saved.ok());
+
+    // The same file, opened by something that only works small.
+    auto strict = LSContext::create();
+    CanvasLimits small;
+    small.maxDimension = 256;
+    small.maxPixels = 256ull * 256ull;
+    LS_REQUIRE(strict->setCanvasLimits(small).ok());
+    LS_CHECK(strict->deserializeDocument(saved.value).fail());
+
+    // And by something that can take it.
+    auto peer = LSContext::create();
+    LS_REQUIRE(peer->setCanvasLimits(wide).ok());
+    LS_CHECK(peer->deserializeDocument(saved.value).ok());
+}
+
 } // namespace
 
 int main() {
@@ -142,5 +212,7 @@ int main() {
     testResizeIsBoundedToo();
     testCompileOutputIsBounded();
     testAFileCannotDeclareAnAbsurdCanvas();
+    testAnApplicationSetsItsOwnPolicy();
+    testTheReaderUsesTheReadersPolicy();
     return lstest::report("limits");
 }

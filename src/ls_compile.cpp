@@ -41,8 +41,7 @@ Result<RasterBuffer> allocateRaster(uint32_t width, uint32_t height) {
     // below overflows its 32 bits and the raster ends up claiming a size its
     // storage does not have; well before that, the allocation is one no machine
     // will satisfy.
-    if (width > kMaxCanvasDimension || height > kMaxCanvasDimension ||
-        static_cast<uint64_t>(width) * height > kMaxCanvasPixels) {
+    if (width >= kCanvasDimensionCeiling || height >= kCanvasDimensionCeiling) {
         return Result<RasterBuffer>::err(LSError::InvalidParameter);
     }
     RasterBuffer raster;
@@ -657,6 +656,16 @@ uint64_t LSContext::Impl::hashProfile(const CompileProfile& profile) const {
         hash = mix(hash, static_cast<uint64_t>(static_cast<unsigned char>(c)));
     }
     return hash;
+}
+
+// A profile carries its own output size, so a compile can ask for a raster far
+// larger than any document. An application that has declared what it works with
+// is held to it here as well: raising the limit is a decision, not an accident.
+bool LSContext::Impl::profileOutputIsUsable(const CompileProfile& profile) const {
+    if (profile.outputWidth == 0 || profile.outputHeight == 0) {
+        return true;        // resolved from the document, which is already bounded
+    }
+    return canvasSizeIsUsable(profile.outputWidth, profile.outputHeight, canvasLimits);
 }
 
 CompileProfile LSContext::Impl::resolveProfileDefaults(const CompileProfile& profile,
@@ -2467,6 +2476,10 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
     const SpriteData* sprite = impl_->findSprite(id);
     if (sprite == nullptr) {
         return Result<CompileResult>::err(LSError::InvalidId);
+    }
+
+    if (!impl_->profileOutputIsUsable(profile)) {
+        return Result<CompileResult>::err(LSError::InvalidParameter);
     }
 
     const CompileProfile resolved = impl_->resolveProfileDefaults(profile, sprite->document);

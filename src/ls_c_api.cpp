@@ -246,6 +246,24 @@ ls_error ls_document_canvas(ls_context* ctx, ls_id document,
     return LS_OK;
 }
 
+ls_error ls_set_canvas_limits(ls_context* ctx, uint32_t max_dimension,
+                              uint64_t max_pixels) {
+    LS_C_CONTEXT(ctx);
+    CanvasLimits limits;
+    limits.maxDimension = max_dimension;
+    limits.maxPixels = max_pixels;
+    return toError(engine.setCanvasLimits(limits).error);
+}
+
+ls_error ls_canvas_limits(ls_context* ctx, uint32_t* out_max_dimension,
+                          uint64_t* out_max_pixels) {
+    LS_C_CONTEXT(ctx);
+    const CanvasLimits limits = engine.canvasLimits();
+    if (out_max_dimension != nullptr) { *out_max_dimension = limits.maxDimension; }
+    if (out_max_pixels != nullptr)    { *out_max_pixels = limits.maxPixels; }
+    return LS_OK;
+}
+
 ls_error ls_document_sprite_count(ls_context* ctx, ls_id document, size_t* out_count) {
     LS_C_CONTEXT(ctx);
     LS_C_REQUIRE(out_count != nullptr);

@@ -161,6 +161,15 @@ LS_C_API ls_error ls_document_destroy(ls_context* ctx, ls_id document);
 LS_C_API ls_error ls_document_canvas(ls_context* ctx, ls_id document,
                                      uint32_t* out_width, uint32_t* out_height);
 
+/* How large a canvas this application is willing to work with. Applies to
+ * documents created, resized and read from files, so raising it lets this
+ * context open files a stricter one refuses. Refused if it exceeds what the
+ * engine can represent -- everything below that is a cost decision. */
+LS_C_API ls_error ls_set_canvas_limits(ls_context* ctx, uint32_t max_dimension,
+                                       uint64_t max_pixels);
+LS_C_API ls_error ls_canvas_limits(ls_context* ctx, uint32_t* out_max_dimension,
+                                   uint64_t* out_max_pixels);
+
 /* What a document contains. The way to find your way around a document you did
  * not build -- one just read from a file, where every id was minted fresh. */
 LS_C_API ls_error ls_document_sprite_count(ls_context* ctx, ls_id document,

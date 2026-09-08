@@ -59,16 +59,34 @@ the 32-bit stride overflows and a raster comes back reporting a size its storage
 does not have, with every bounds check in `writePixel` passing on a buffer that
 is not there.
 
-| Limit | Value | Why |
+There are two bounds, and conflating them would be a mistake.
+
+**The ceiling** is a property of this implementation and no application may raise
+it. `kCanvasDimensionCeiling` is 2^29: past 2^30 the stride wraps, and the margin
+keeps the arithmetic well clear.
+
+**The policy** is a judgement about cost and belongs to the application.
+`setCanvasLimits` sets it; the defaults are below. It governs documents created,
+resized and *read from files*, so an application willing to work larger can also
+open larger files, and a stricter one is never handed a document it cannot draw.
+
+| Default | Value | Why |
 |---|---|---|
-| `kMaxCanvasDimension` | 16384 per side | A long sprite sheet is cheap; a long one is not the problem |
-| `kMaxCanvasPixels` | 16,777,216 (4096x4096) | Holds one raster to 64 MB whatever the aspect |
+| `kDefaultMaxCanvasDimension` | 16384 per side | A long sprite sheet is cheap |
+| `kDefaultMaxCanvasPixels` | 16,777,216 (4096x4096) | Holds one raster to 64 MB whatever the aspect |
 | `kMaxLayersPerSprite` | 1024 | Compile cost is linear in layers on top of area |
 
 **Area, not just a side.** A dimension-only cap would admit 16384x16384 -- a
 gigabyte per raster, minutes per compile -- while refusing a 12000x200 sheet that
 costs almost nothing. Either side may reach the dimension cap; the two together
 may not exceed the area cap.
+
+```cpp
+ls::CanvasLimits limits;
+limits.maxDimension = 16384;
+limits.maxPixels    = 8192ull * 8192ull;   // slower, and that is your call
+ctx->setCanvasLimits(limits);
+```
 
 The numbers come from measuring this engine. Compile cost tracks canvas area
 times layer count:

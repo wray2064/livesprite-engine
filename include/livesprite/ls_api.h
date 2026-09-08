@@ -414,6 +414,16 @@ public:
     Result<DocumentInfo> getDocumentInfo(DocumentId doc) const;
     VoidResult          setCanvasSize(DocumentId doc, uint32_t width, uint32_t height);
     VoidResult          setDocumentName(DocumentId doc, std::string_view name);
+
+    // How large a canvas this application is willing to work with. Applies to
+    // documents created, resized, and read from files, so raising it lets this
+    // context open files a stricter one would refuse.
+    //
+    // Refused if it exceeds what the engine can represent -- see
+    // kCanvasDimensionCeiling. Everything below that is a cost decision, and the
+    // cost is in the documentation: area times layers, seconds at 4096x4096.
+    VoidResult          setCanvasLimits(const CanvasLimits& limits);
+    CanvasLimits        canvasLimits() const;
     std::vector<DocumentId> documents() const;
 
     Result<SpriteId>    createSprite(DocumentId doc);

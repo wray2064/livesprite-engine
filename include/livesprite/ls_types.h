@@ -53,14 +53,35 @@ constexpr uint32_t LS_ENGINE_VERSION =
 // puts the practical figure near 9000, and users report trouble well below that.
 // This engine compiles from operations instead of blitting a stored bitmap, so
 // its practical ceiling is lower and worth stating honestly.
-constexpr uint32_t kMaxCanvasDimension = 16384;
+// There are two different bounds here and conflating them would be a mistake.
+//
+// The *ceiling* is a safety property of this implementation. A raster's stride
+// is a uint32 holding width * 4, so a width at or past 2^30 wraps and produces a
+// buffer that reports a size its storage does not have. Nothing may opt out of
+// this, and no application can raise it, because past it the engine cannot
+// represent what it is being asked for.
+constexpr uint32_t kCanvasDimensionCeiling = 1u << 29;
+
+// The *policy* is a judgement about cost, and it belongs to the application.
+// These are the defaults -- chosen by measuring this engine, see below -- and an
+// application changes them with setCanvasLimits. An editor for small sprites may
+// want less; a production tool willing to wait may want more.
+constexpr uint32_t kDefaultMaxCanvasDimension = 16384;
 
 // 4096 x 4096. Holds one raster to 64 MB whatever the aspect ratio.
-constexpr uint64_t kMaxCanvasPixels = 16777216ull;
+constexpr uint64_t kDefaultMaxCanvasPixels = 16777216ull;
 
 // Beyond this a sprite is not slow, it is a mistake. Compile cost is linear in
 // layer count on top of area.
 constexpr uint32_t kMaxLayersPerSprite = 1024;
+
+// What an application is willing to work with. Raise it and compiles get slower
+// in proportion to area; the engine will not stop you until the ceiling, where
+// it stops you absolutely.
+struct CanvasLimits {
+    uint32_t maxDimension = kDefaultMaxCanvasDimension;
+    uint64_t maxPixels    = kDefaultMaxCanvasPixels;
+};
 
 // ---------------------------------------------------------------------------
 // Opaque typed ID handles
@@ -391,14 +412,25 @@ inline RasterBuffer makeRaster(uint32_t width, uint32_t height) {
     // An empty raster is the only safe answer to a size this cannot represent.
     // Returning one that reports a width while holding no storage would leave
     // writePixel's bounds check passing on a buffer that is not there.
-    if (width > kMaxCanvasDimension || height > kMaxCanvasDimension ||
-        static_cast<uint64_t>(width) * height > kMaxCanvasPixels) {
+    //
+    // This is the ceiling, not the policy: an application's own limit is checked
+    // where documents are made, while this is the line below which the engine
+    // can still describe what it holds.
+    if (width >= kCanvasDimensionCeiling || height >= kCanvasDimensionCeiling) {
         return raster;
+    }
+    // Sizes below the ceiling are representable but not necessarily allocatable,
+    // and this is a header-inline helper an application calls directly. An empty
+    // raster is a far better answer than a bad_alloc thrown into somebody's
+    // paint loop.
+    try {
+        raster.pixels.assign(static_cast<size_t>(width) * height * 4, 0);
+    } catch (...) {
+        return RasterBuffer{};
     }
     raster.width = width;
     raster.height = height;
     raster.stride = width * 4;
-    raster.pixels.assign(static_cast<size_t>(raster.stride) * height, 0);
     return raster;
 }
 
