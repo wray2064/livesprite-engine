@@ -528,6 +528,17 @@ ls_error ls_region_combine(ls_context* ctx, ls_id a, ls_id b, int32_t op, ls_id*
     });
 }
 
+ls_error ls_region_source_geometry(ls_context* ctx, ls_id region, ls_id* out_geometry) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_geometry != nullptr);
+    auto source = engine.getRegionSourceGeometry(asId<RegionId>(region));
+    if (source.fail()) {
+        return toError(source.error);
+    }
+    *out_geometry = source.value.value;
+    return LS_OK;
+}
+
 ls_error ls_region_pixel_count(ls_context* ctx, ls_id region, uint64_t* out_count) {
     LS_C_CONTEXT(ctx);
     LS_C_REQUIRE(out_count != nullptr);

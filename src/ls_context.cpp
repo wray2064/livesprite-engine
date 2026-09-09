@@ -1698,6 +1698,16 @@ Result<RegionId> LSContext::contractRegion(RegionId r, float pixels) {
     return insetRegion(r, { pixels, true, 2.f });
 }
 
+Result<GeometryId> LSContext::getRegionSourceGeometry(RegionId r) const {
+    const RegionData* data = impl_->findRegion(r);
+    if (data == nullptr) {
+        return Result<GeometryId>::err(LSError::InvalidId);
+    }
+    // A null id is a real answer, not a failure: plenty of regions are authored
+    // rather than generated, and asking about one is not a mistake.
+    return Result<GeometryId>::ok(data->source);
+}
+
 Result<GeometryBounds> LSContext::getRegionBounds(RegionId r) const {
     const RegionData* data = impl_->findRegion(r);
     if (data == nullptr) {

@@ -496,6 +496,12 @@ public:
     Result<RegionId>    contractRegion(RegionId r, float pixels);
 
     // Region queries
+    // The geometry a region was built from, or a null id when it has none --
+    // because it was authored as pixels, or because it was edited by hand and
+    // stopped tracking. An application that offers editable shapes needs this to
+    // recognise one in a document it has just loaded: the link survives a save,
+    // but without a way to ask, a rectangle comes back as anonymous pixels.
+    Result<GeometryId>     getRegionSourceGeometry(RegionId r) const;
     Result<GeometryBounds> getRegionBounds(RegionId r) const;
     Result<IntervalSet>    getRegionIntervals(RegionId r) const;
     Result<IntervalSet>    getRegionBoundaryIntervals(RegionId r) const;

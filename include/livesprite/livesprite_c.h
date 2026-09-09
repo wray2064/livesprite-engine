@@ -242,6 +242,10 @@ LS_C_API ls_error ls_region_erase_pixels(ls_context* ctx, ls_id region,
 LS_C_API ls_error ls_region_combine(ls_context* ctx, ls_id a, ls_id b, int32_t op,
                                     ls_id* out_region);
 
+/* The geometry a region was built from, or 0 when it has none. An application
+ * offering editable shapes needs this to recognise one in a loaded document. */
+LS_C_API ls_error ls_region_source_geometry(ls_context* ctx, ls_id region,
+                                            ls_id* out_geometry);
 LS_C_API ls_error ls_region_pixel_count(ls_context* ctx, ls_id region, uint64_t* out_count);
 LS_C_API ls_error ls_region_bind_palette_role(ls_context* ctx, ls_id region, uint32_t role);
 LS_C_API ls_error ls_region_destroy(ls_context* ctx, ls_id region);

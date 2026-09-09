@@ -340,7 +340,71 @@ void testNamesCanBeChanged() {
     LS_CHECK(reader->getLayerInfo(sprites.value.layers.front()).value.name == "background");
 }
 
+// An application offering editable shapes has to recognise one in a document it
+// just loaded. The link from region to geometry survives a save; without a way
+// to ask, a rectangle comes back as anonymous pixels.
+void testARegionRemembersItsGeometry() {
+    auto ctx = LSContext::create();
+    const DocumentId doc = ctx->createDocument({"shapes", 32, 32}).value;
+
+    const GeometryId rect = ctx->createRect(doc, {{4.f, 4.f}, 8.f, 8.f, 0.f}).value;
+    const RegionId fromGeometry = ctx->createRegionFromGeometry(rect).value;
+
+    auto source = ctx->getRegionSourceGeometry(fromGeometry);
+    LS_REQUIRE(source.ok());
+    LS_CHECK(source.value == rect);
+
+    // A region authored as pixels has none, and asking is not an error.
+    PixelRegionDesc drawn;
+    drawn.pixels.push_back({{1, 1}, Color{255, 255, 255, 255}});
+    const RegionId authored = ctx->createRegionFromPixels(doc, drawn).value;
+    auto none = ctx->getRegionSourceGeometry(authored);
+    LS_CHECK(none.ok());
+    LS_CHECK(!none.value.valid());
+
+    LS_CHECK(ctx->getRegionSourceGeometry(RegionId{}).fail());
+
+    // The link survives a round trip, which is the case that matters.
+    const SpriteId sprite = ctx->createSprite(doc).value;
+    const LayerId layer = ctx->createLayer(sprite, {"main"}).value;
+    FillSolidOp fill;
+    fill.targetRegion = fromGeometry;
+    ctx->addOperation(layer, fill);
+
+    auto saved = ctx->serializeDocument(doc);
+    LS_REQUIRE(saved.ok());
+
+    auto reader = LSContext::create();
+    auto loaded = reader->deserializeDocument(saved.value);
+    LS_REQUIRE(loaded.ok());
+
+    auto info = reader->getDocumentInfo(loaded.value);
+    LS_REQUIRE(info.ok() && !info.value.sprites.empty());
+    auto sprites = reader->getSpriteInfo(info.value.sprites.front());
+    LS_REQUIRE(sprites.ok() && !sprites.value.layers.empty());
+    auto operations = reader->getLayerOperations(sprites.value.layers.front());
+    LS_REQUIRE(operations.ok() && !operations.value.empty());
+
+    auto region = reader->getOperationParameter(operations.value.front().id,
+                                                "targetRegion");
+    LS_REQUIRE(region.ok());
+    const uint64_t* handle = std::get_if<uint64_t>(&region.value);
+    LS_REQUIRE(handle != nullptr && *handle != 0);
+
+    RegionId reloaded;
+    reloaded.value = *handle;
+    auto reloadedSource = reader->getRegionSourceGeometry(reloaded);
+    LS_REQUIRE(reloadedSource.ok());
+    LS_CHECK(reloadedSource.value.valid());
+
+    // And it is the geometry that still drives the picture: editing it moves
+    // what the reloaded document draws.
+    LS_CHECK(reader->updateRect(reloadedSource.value,
+                                {{2.f, 2.f}, 20.f, 20.f, 0.f}).ok());
+}
+
 int main() {
+    testARegionRemembersItsGeometry();
     testNamesCanBeChanged();
     testLoadedDocumentIsNavigable();
     testSnapshotRestoreKeepsHandles();
