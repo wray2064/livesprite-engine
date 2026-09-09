@@ -321,6 +321,28 @@ ls_error ls_sprite_destroy(ls_context* ctx, ls_id sprite) {
     return toError(engine.deleteSprite(asId<SpriteId>(sprite)).error);
 }
 
+ls_error ls_sprite_clone(ls_context* ctx, ls_id sprite, ls_id* out_clone) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_clone != nullptr);
+    return guarded([&] {
+        return outId(engine.cloneSprite(asId<SpriteId>(sprite)), out_clone);
+    });
+}
+
+ls_error ls_document_set_sprite_order(ls_context* ctx, ls_id document,
+                                      const ls_id* ordered, size_t count) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(ordered != nullptr || count == 0);
+    return guarded([&] {
+        std::vector<SpriteId> sprites;
+        sprites.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            sprites.push_back(asId<SpriteId>(ordered[i]));
+        }
+        return toError(engine.setSpriteOrder(asId<DocumentId>(document), sprites).error);
+    });
+}
+
 ls_error ls_layer_create(ls_context* ctx, ls_id sprite, const char* name, ls_id* out_layer) {
     LS_C_CONTEXT(ctx);
     LS_C_REQUIRE(out_layer != nullptr);

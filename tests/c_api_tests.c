@@ -427,6 +427,45 @@ static void test_metadata(void) {
     ls_context_destroy(ctx);
 }
 
+
+/* Frames through the ABI: clone one, reorder them, read the order back. This is
+ * the whole authoring gesture a bridge or a scripted tool needs. */
+static void test_frames(void) {
+    ls_context* ctx = ls_context_create();
+    ls_id doc = 0, first = 0, second = 0, third = 0, read = 0;
+    ls_id ordered[3];
+    size_t count = 0;
+
+    CHECK(ctx != NULL);
+    if (ctx == NULL) { return; }
+
+    CHECK_OK(ls_document_create(ctx, "walk", 8, 8, &doc));
+    CHECK_OK(ls_sprite_create(ctx, doc, &first));
+    CHECK_OK(ls_sprite_clone(ctx, first, &second));
+    CHECK_OK(ls_sprite_clone(ctx, second, &third));
+    CHECK(second != first && third != second);
+
+    CHECK_OK(ls_document_sprite_count(ctx, doc, &count));
+    CHECK(count == 3);
+
+    ordered[0] = third;
+    ordered[1] = first;
+    ordered[2] = second;
+    CHECK_OK(ls_document_set_sprite_order(ctx, doc, ordered, 3));
+
+    CHECK_OK(ls_document_sprite_at(ctx, doc, 0, &read));
+    CHECK(read == third);
+    CHECK_OK(ls_document_sprite_at(ctx, doc, 2, &read));
+    CHECK(read == second);
+
+    /* Not a permutation, so refused rather than half applied. */
+    CHECK(ls_document_set_sprite_order(ctx, doc, ordered, 2) != LS_OK);
+    CHECK_OK(ls_document_sprite_at(ctx, doc, 0, &read));
+    CHECK(read == third);
+
+    ls_context_destroy(ctx);
+}
+
 int main(void) {
     test_version_and_errors();
     test_boundary_is_defensive();
@@ -437,6 +476,7 @@ int main(void) {
     test_package_round_trip();
     test_snapshot_restore();
     test_metadata();
+    test_frames();
 
     if (failures == 0) {
         printf("c_api: all checks passed\n");

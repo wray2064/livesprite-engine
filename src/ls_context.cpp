@@ -9,6 +9,7 @@
 
 #include "ls_internal.h"
 #include "ls_math.h"
+#include "ls_reflect.h"
 
 #include <algorithm>
 #include <cmath>
@@ -869,6 +870,174 @@ Result<SpriteId> LSContext::createSprite(DocumentId doc) {
     return Result<SpriteId>::ok(id);
 }
 
+namespace {
+
+// What a clone owns and what it shares.
+//
+// A clone is what an animation frame is made of: duplicate the last frame, then
+// change one thing in the copy. That only works if the copy owns its drawing --
+// otherwise moving the arm in frame 2 moves it in frame 1 as well, and there is
+// no way to tell from looking at either of them.
+//
+// So the rule is drawn by what a thing means, not by what is convenient:
+//
+//   - Geometry and regions are the drawing. Copied.
+//   - Pivots, sockets and boundaries belong to the sprite. Copied, and every
+//     operation naming one is pointed at the copy.
+//   - Palettes, ramps and patterns are document resources shared on purpose --
+//     a palette role recolouring every frame at once is the reason roles exist.
+//     Shared.
+//   - A sprite naming itself, as an outline does, means the clone.
+//
+// Every one of those goes through the same field tables serialization uses, so
+// an operation added later is remapped without anyone remembering to come back
+// here.
+struct CloneRemap {
+    const std::map<uint64_t, uint64_t>* geometry = nullptr;
+    const std::map<uint64_t, uint64_t>* regions  = nullptr;
+    const std::map<uint64_t, uint64_t>* pivots   = nullptr;
+    const std::map<uint64_t, uint64_t>* sockets  = nullptr;
+    const std::map<uint64_t, uint64_t>* boundaries = nullptr;
+    uint64_t sourceSprite = 0;
+    uint64_t cloneSprite  = 0;
+
+    static void apply(const std::map<uint64_t, uint64_t>* table, uint64_t& value) {
+        if (table == nullptr || value == 0) {
+            return;
+        }
+        auto found = table->find(value);
+        if (found != table->end()) {
+            value = found->second;
+        }
+    }
+
+    // Anything that is not a handle is copied as it stands.
+    template<typename T>
+    void field(const char*, T&) {}
+
+    template<typename Tag>
+    void field(const char*, TypedId<Tag>& value) {
+        if constexpr (std::is_same_v<Tag, TagGeometry>) {
+            apply(geometry, value.value);
+        } else if constexpr (std::is_same_v<Tag, TagRegion>) {
+            apply(regions, value.value);
+        } else if constexpr (std::is_same_v<Tag, TagPivot>) {
+            apply(pivots, value.value);
+        } else if constexpr (std::is_same_v<Tag, TagSocket>) {
+            apply(sockets, value.value);
+        } else if constexpr (std::is_same_v<Tag, TagBoundary>) {
+            apply(boundaries, value.value);
+        } else if constexpr (std::is_same_v<Tag, TagSprite>) {
+            // An outline generated from "this sprite" must mean the clone.
+            if (value.value == sourceSprite && sourceSprite != 0) {
+                value.value = cloneSprite;
+            }
+        }
+        // Palette, ramp, pattern and layer handles are left alone on purpose.
+    }
+};
+
+// Duplicates a geometry, or returns the copy already made for it.
+GeometryId cloneGeometry(LSContext::Impl& impl, GeometryId source,
+                         std::map<uint64_t, uint64_t>& made) {
+    if (!source.valid()) {
+        return GeometryId::null();
+    }
+    auto already = made.find(source.value);
+    if (already != made.end()) {
+        return GeometryId{ already->second };
+    }
+    const GeometryData* data = impl.findGeometry(source);
+    if (data == nullptr) {
+        return GeometryId::null();
+    }
+    const GeometryData copy = *data;
+    const GeometryId id = impl.mint<GeometryId>();
+    impl.geometry.emplace(id.value, copy);
+    if (DocumentData* document = impl.findDocument(copy.document)) {
+        document->geometry.push_back(id);
+    }
+    made.emplace(source.value, id.value);
+    return id;
+}
+
+// Duplicates a region and the geometry it tracks, so the copy keeps being a
+// live shape rather than becoming loose pixels.
+RegionId cloneRegion(LSContext::Impl& impl, RegionId source,
+                     std::map<uint64_t, uint64_t>& madeGeometry,
+                     std::map<uint64_t, uint64_t>& madeRegions) {
+    if (!source.valid()) {
+        return RegionId::null();
+    }
+    auto already = madeRegions.find(source.value);
+    if (already != madeRegions.end()) {
+        return RegionId{ already->second };
+    }
+    const RegionData* data = impl.findRegion(source);
+    if (data == nullptr) {
+        return RegionId::null();
+    }
+    RegionData copy = *data;
+    copy.source = cloneGeometry(impl, copy.source, madeGeometry);
+
+    const RegionId id = impl.mint<RegionId>();
+    impl.regions.emplace(id.value, copy);
+    if (DocumentData* document = impl.findDocument(copy.document)) {
+        document->regions.push_back(id);
+    }
+    if (copy.source.valid()) {
+        impl.addDependencyEdge(copy.source.value, id.value);
+    }
+    madeRegions.emplace(source.value, id.value);
+    return id;
+}
+
+// Every handle an operation holds, so the copies can be made before the
+// operation is rewritten to point at them.
+struct CollectHandles {
+    std::vector<GeometryId>* geometry = nullptr;
+    std::vector<RegionId>*   regions  = nullptr;
+
+    template<typename T>
+    void field(const char*, T&) {}
+
+    template<typename Tag>
+    void field(const char*, TypedId<Tag>& value) {
+        if constexpr (std::is_same_v<Tag, TagGeometry>) {
+            if (value.valid()) { geometry->push_back(GeometryId{ value.value }); }
+        } else if constexpr (std::is_same_v<Tag, TagRegion>) {
+            if (value.valid()) { regions->push_back(RegionId{ value.value }); }
+        }
+    }
+};
+
+} // namespace
+
+VoidResult LSContext::setSpriteOrder(DocumentId doc, const std::vector<SpriteId>& ordered) {
+    DocumentData* data = impl_->findDocument(doc);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    // A permutation or nothing. Accepting a subset would silently drop sprites,
+    // and accepting extras would list one twice -- both leave a document that
+    // disagrees with itself about what it contains.
+    if (ordered.size() != data->sprites.size()) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    for (SpriteId sprite : ordered) {
+        const SpriteData* spriteData = impl_->findSprite(sprite);
+        if (spriteData == nullptr || spriteData->document != doc) {
+            return VoidResult::err(LSError::InvalidParameter);
+        }
+        if (std::count(ordered.begin(), ordered.end(), sprite) != 1) {
+            return VoidResult::err(LSError::InvalidParameter);
+        }
+    }
+    data->sprites = ordered;
+    // Nothing recompiles: order is not something a sprite draws with.
+    return VoidResult::success();
+}
+
 Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
     const SpriteData* source = impl_->findSprite(src);
     if (source == nullptr) {
@@ -894,18 +1063,37 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
             pivotRemap[pivot.value] = clonedPivot.value.value;
         }
     }
+    std::map<uint64_t, uint64_t> socketRemap;
     for (SocketId socket : sourceCopy.sockets) {
         const SocketData* data = impl_->findSocket(socket);
         if (data != nullptr) {
-            addSocket(cloneId, data->desc);
+            auto clonedSocket = addSocket(cloneId, data->desc);
+            if (clonedSocket.ok()) {
+                socketRemap[socket.value] = clonedSocket.value.value;
+            }
         }
     }
+    // A boundary is defined by a geometry, and that geometry is part of the
+    // drawing like any other, so the clone gets its own.
+    std::map<uint64_t, uint64_t> geometryRemapEarly;
+    std::map<uint64_t, uint64_t> boundaryRemap;
     for (BoundaryId boundary : sourceCopy.boundaries) {
         const BoundaryData* data = impl_->findBoundary(boundary);
         if (data != nullptr) {
-            createBoundary(cloneId, data->desc);
+            BoundaryDesc desc = data->desc;
+            desc.shape = cloneGeometry(*impl_, desc.shape, geometryRemapEarly);
+            auto clonedBoundary = createBoundary(cloneId, desc);
+            if (clonedBoundary.ok()) {
+                boundaryRemap[boundary.value] = clonedBoundary.value.value;
+            }
         }
     }
+
+    // Everything the clone is given a copy of, keyed by what it was copied
+    // from. Built as the operations are walked, and shared across layers, so a
+    // region two layers both fill stays one region in the copy.
+    std::map<uint64_t, uint64_t> geometryRemap = geometryRemapEarly;
+    std::map<uint64_t, uint64_t> regionRemap;
 
     for (LayerId layer : sourceCopy.layers) {
         const LayerData* layerData = impl_->findLayer(layer);
@@ -922,9 +1110,37 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
         }
         for (OperationId op : layerCopy.operations) {
             const OperationData* opData = impl_->findOperation(op);
-            if (opData != nullptr) {
-                addOperation(clonedLayer.value, opData->op);
+            if (opData == nullptr) {
+                continue;
             }
+            Operation copy = opData->op;
+
+            // Make the copies first, then point the operation at them. Doing it
+            // in one pass would mean rewriting a handle to something not built
+            // yet.
+            std::vector<GeometryId> heldGeometry;
+            std::vector<RegionId>   heldRegions;
+            CollectHandles collector{ &heldGeometry, &heldRegions };
+            reflect::visitOperation(collector, copy);
+
+            for (RegionId held : heldRegions) {
+                cloneRegion(*impl_, held, geometryRemap, regionRemap);
+            }
+            for (GeometryId held : heldGeometry) {
+                cloneGeometry(*impl_, held, geometryRemap);
+            }
+
+            CloneRemap remap;
+            remap.geometry = &geometryRemap;
+            remap.regions = &regionRemap;
+            remap.pivots = &pivotRemap;
+            remap.sockets = &socketRemap;
+            remap.boundaries = &boundaryRemap;
+            remap.sourceSprite = src.value;
+            remap.cloneSprite = cloneId.value;
+            reflect::visitOperation(remap, copy);
+
+            addOperation(clonedLayer.value, copy);
         }
     }
 

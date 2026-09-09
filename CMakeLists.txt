@@ -167,6 +167,10 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_package_tests PRIVATE livesprite)
     add_test(NAME livesprite_package COMMAND livesprite_package_tests)
 
+    add_executable(livesprite_frame_tests tests/frame_tests.cpp)
+    target_link_libraries(livesprite_frame_tests PRIVATE livesprite)
+    add_test(NAME livesprite_frame COMMAND livesprite_frame_tests)
+
     # The determinism suite reaches into src/ for the maths kernels it checks.
     add_executable(livesprite_determinism_tests tests/determinism_tests.cpp)
     target_link_libraries(livesprite_determinism_tests PRIVATE livesprite)

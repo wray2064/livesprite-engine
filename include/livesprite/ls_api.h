@@ -427,6 +427,16 @@ public:
     std::vector<DocumentId> documents() const;
 
     Result<SpriteId>    createSprite(DocumentId doc);
+
+    // The order the sprites sit in the document. It is what round-trips through
+    // a save, so an application that means something by that order -- the frames
+    // of an animation, in order -- can keep it without inventing a side list
+    // that has to be kept in step.
+    //
+    // Reordering renumbers nothing: every id stays exactly what it was, so a
+    // handle an application is holding survives a reorder the same way it
+    // survives an undo.
+    VoidResult          setSpriteOrder(DocumentId doc, const std::vector<SpriteId>& ordered);
     Result<SpriteId>    cloneSprite(SpriteId src);
     VoidResult          deleteSprite(SpriteId id);
 

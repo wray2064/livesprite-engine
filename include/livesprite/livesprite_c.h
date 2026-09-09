@@ -184,6 +184,18 @@ LS_C_API ls_error ls_document_name(ls_context* ctx, ls_id document,
 LS_C_API ls_error ls_sprite_create(ls_context* ctx, ls_id document, ls_id* out_sprite);
 LS_C_API ls_error ls_sprite_destroy(ls_context* ctx, ls_id sprite);
 
+/* Duplicates a sprite, drawing and all. The copy owns what it draws: editing a
+ * shape in the copy does not move it in the original, which is what makes this
+ * the call an animation frame is made with. */
+LS_C_API ls_error ls_sprite_clone(ls_context* ctx, ls_id sprite, ls_id* out_clone);
+
+/* Reorders the sprites of a document. `ordered` must be a permutation of what
+ * the document already holds -- count and all -- or nothing is changed. The
+ * order is what a saved file carries, so an application that means something by
+ * it, such as the order of animation frames, can rely on it. */
+LS_C_API ls_error ls_document_set_sprite_order(ls_context* ctx, ls_id document,
+                                               const ls_id* ordered, size_t count);
+
 LS_C_API ls_error ls_layer_create(ls_context* ctx, ls_id sprite, const char* name,
                                   ls_id* out_layer);
 LS_C_API ls_error ls_layer_destroy(ls_context* ctx, ls_id layer);
