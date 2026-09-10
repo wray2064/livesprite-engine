@@ -1405,6 +1405,7 @@ Result<LayerInfo> LSContext::getLayerInfo(LayerId id) const {
     }
     LayerInfo info;
     info.id = id;
+    info.sprite = data->sprite;
     info.name = data->desc.name;
     info.type = data->desc.type;
     info.opacity = data->desc.opacity;

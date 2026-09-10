@@ -166,6 +166,11 @@ struct GroupInfo {
 
 struct LayerInfo {
     LayerId     id;
+    // Which sprite this layer belongs to. An application holding a layer handle
+    // needs it to say anything about the layer's surroundings -- an outline that
+    // traces the whole figure names the sprite, and the layer is all the caller
+    // has.
+    SpriteId    sprite;
     std::string name;
     LayerType   type    = LayerType::Drawing;
     float       opacity = 1.f;
@@ -853,6 +858,17 @@ public:
     std::vector<std::string> registeredOperationTypes() const;
 
 private:
+    // compileLayer, told what the whole sprite draws.
+    //
+    // A silhouette outline that names a sprite traces everything the sprite
+    // draws rather than just its own layer, and a layer compiled on its own
+    // cannot know that. compileSprite works it out once and passes it down.
+    // Null means the layer is being compiled alone, and such an outline falls
+    // back to tracing its own layer rather than disappearing.
+    Result<CompileResult> compileLayerWithin(LayerId id, const CompileProfile& profile,
+                                             const RasterBuffer* spriteSilhouette,
+                                             bool suppressSpriteOutlines) const;
+
     std::unique_ptr<Impl> impl_;
     LSContext();
 };

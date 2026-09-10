@@ -197,6 +197,14 @@ enum class OutlineSide : uint8_t { Inside, Outside, Center };
 enum class OutlineCorner : uint8_t { Sharp, Round, Bevel };
 enum class OutlineDiagonal : uint8_t { Include, Exclude, Bridge };
 
+// An outline traced around what has already been drawn, rather than stamped in
+// as pixels. It resolves during the compile, so it follows the artwork instead
+// of being left behind when the artwork moves.
+//
+// `targetSprite` chooses what "the artwork" means. Left null it is this layer
+// alone, which is what outlines one part of a character. Set to the layer's own
+// sprite it is everything the sprite draws, which is what puts one line around
+// the whole figure however many layers it is built from.
 struct GenerateSilhouetteOutlineOp {
     SpriteId        targetSprite;       // null = the sprite owning this operation
     float           thickness           = 1.f;

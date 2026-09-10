@@ -695,6 +695,13 @@ struct CompileEnv {
     PaletteId palette;
     Rect2i spriteBounds;                 // content bounds so far, for Sprite space
     std::vector<std::string>* trace = nullptr;
+
+    // What the whole sprite draws, for an outline that traces the figure rather
+    // than one layer of it. Null when a layer is compiled on its own.
+    const RasterBuffer* spriteSilhouette = nullptr;
+    // Set during the pass that builds that silhouette, so the outlines being
+    // measured do not measure themselves.
+    bool suppressSpriteOutlines = false;
     SamplePolicyFn samplePolicy;         // set when the profile names a plugin policy
 
     Color role(ColorRole colorRole, Color fallback) const {
@@ -1928,7 +1935,19 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
     // --- outlines ---------------------------------------------------------
 
     if (const auto* outline = std::get_if<GenerateSilhouetteOutlineOp>(&op)) {
-        const IntervalSet silhouette = geom::maskToIntervals(current, 0.001f);
+        // What this outline traces. Naming a sprite means the whole figure;
+        // naming nothing means this layer, which is what it has always meant.
+        const bool wholeSprite = outline->targetSprite.valid();
+        if (wholeSprite && env.suppressSpriteOutlines) {
+            // This is the pass that works out what the sprite draws. An outline
+            // measuring the sprite must not be part of what it measures, or the
+            // second pass would trace the first pass's outline.
+            return false;
+        }
+        const RasterBuffer& source =
+            (wholeSprite && env.spriteSilhouette != nullptr) ? *env.spriteSilhouette
+                                                             : current;
+        const IntervalSet silhouette = geom::maskToIntervals(source, 0.001f);
         if (silhouette.empty()) {
             return false;
         }
@@ -2021,6 +2040,17 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
 } // namespace
 
 Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& profile) {
+    return compileLayerWithin(id, profile, nullptr, false);
+}
+
+// True when this layer holds an outline that traces the whole sprite. Such a
+// layer cannot be cached against the layer alone -- what it draws depends on
+// every other layer -- and it is what makes compileSprite do a second pass.
+static bool tracesTheWholeSprite(const LSContext::Impl& impl, const LayerData& layer);
+
+Result<CompileResult> LSContext::compileLayerWithin(
+        LayerId id, const CompileProfile& profile,
+        const RasterBuffer* spriteSilhouette, bool suppressSpriteOutlines) const {
     const LayerData* layer = impl_->findLayer(id);
     if (layer == nullptr) {
         return Result<CompileResult>::err(LSError::InvalidId);
@@ -2030,18 +2060,26 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
     const DocumentId docId = impl_->documentOfSprite(spriteId);
     const CompileProfile resolved = impl_->resolveProfileDefaults(profile, docId);
 
+    // A layer holding a sprite-wide outline is never cached by itself. What it
+    // draws depends on every other layer, and the cache key knows only about
+    // this one -- so a hit would hand back an outline of a figure that has
+    // since changed shape somewhere else.
+    const bool cacheable = !tracesTheWholeSprite(*impl_, *layer);
+
     CacheKey key;
     key.entity = id.value;
     key.profileHash = impl_->hashProfile(resolved);
     key.resourceRevision = impl_->resourceRevision;
     key.engineVersion = LS_ENGINE_VERSION;
     key.kind = CacheKind::Layer;
-    auto cached = impl_->compileCache.find(key);
-    if (cached != impl_->compileCache.end() && impl_->graph.dirty.count(id.value) == 0) {
-        ++impl_->cacheHits;
-        return Result<CompileResult>::ok(cached->second);
+    if (cacheable) {
+        auto cached = impl_->compileCache.find(key);
+        if (cached != impl_->compileCache.end() && impl_->graph.dirty.count(id.value) == 0) {
+            ++impl_->cacheHits;
+            return Result<CompileResult>::ok(cached->second);
+        }
+        ++impl_->cacheMisses;
     }
-    ++impl_->cacheMisses;
 
     auto allocated = allocateRaster(resolved.outputWidth, resolved.outputHeight);
     if (allocated.fail()) {
@@ -2065,6 +2103,8 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
                                        static_cast<int32_t>(resolved.outputHeight) } };
     }
     env.trace = resolved.type == CompileProfileType::Debug ? &result.trace : nullptr;
+    env.spriteSilhouette = spriteSilhouette;
+    env.suppressSpriteOutlines = suppressSpriteOutlines;
 
     if (!resolved.samplingPolicyId.empty()) {
         auto policy = impl_->plugins.compilePolicies.find(resolved.samplingPolicyId);
@@ -2467,9 +2507,28 @@ Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& 
     }
 
     result.bounds = rasterBounds(result.raster);
-    impl_->compileCache[key] = result;
-    impl_->graph.dirty.erase(id.value);
+    if (cacheable) {
+        impl_->compileCache[key] = result;
+        impl_->graph.dirty.erase(id.value);
+    }
     return Result<CompileResult>::ok(result);
+}
+
+// Defined here rather than beside the compile because it needs LayerData, and
+// it is the whole reason compileSprite has a second pass.
+static bool tracesTheWholeSprite(const LSContext::Impl& impl, const LayerData& layer) {
+    for (OperationId opId : layer.operations) {
+        const OperationData* data = impl.findOperation(opId);
+        if (data == nullptr) {
+            continue;
+        }
+        if (const auto* outline = std::get_if<GenerateSilhouetteOutlineOp>(&data->op)) {
+            if (outline->targetSprite.valid()) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile& profile) {
@@ -2544,8 +2603,70 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         groupBuffer = RasterBuffer{};
     };
 
+    // An outline that traces the whole figure needs to know what the whole
+    // figure is, and a layer compiled on its own cannot know. So when one is
+    // present -- and only then -- the layers are compiled once with those
+    // outlines suppressed, and their alpha unioned into a silhouette.
+    //
+    // It costs a second compile of every layer. That is the honest price of an
+    // outline that follows artwork spread across layers, and it is paid only by
+    // sprites that ask for one.
+    RasterBuffer silhouette;
+    bool wantsSilhouette = false;
     for (LayerId layerId : order.value) {
-        auto compiled = compileLayer(layerId, resolved);
+        const LayerData* layer = impl_->findLayer(layerId);
+        if (layer != nullptr && tracesTheWholeSprite(*impl_, *layer)) {
+            wantsSilhouette = true;
+            break;
+        }
+    }
+    if (wantsSilhouette) {
+        auto allocatedMask = allocateRaster(resolved.outputWidth, resolved.outputHeight);
+        if (allocatedMask.fail()) {
+            return Result<CompileResult>::err(allocatedMask.error);
+        }
+        silhouette = std::move(allocatedMask.value);
+
+        for (LayerId layerId : order.value) {
+            auto pass = compileLayerWithin(layerId, resolved, nullptr, true);
+            if (pass.fail()) {
+                continue;
+            }
+            const LayerData* layer = impl_->findLayer(layerId);
+
+            // A clipping layer draws nothing outside its base, so it must not
+            // widen the silhouette either.
+            RasterBuffer clipBase;
+            bool clipped = false;
+            if (layer != nullptr && layer->clipBase.valid()) {
+                auto base = compileLayerWithin(layer->clipBase, resolved, nullptr, true);
+                if (base.ok()) {
+                    clipBase = std::move(base.value.raster);
+                    clipped = true;
+                }
+            }
+
+            for (int32_t y = 0; y < static_cast<int32_t>(silhouette.height); ++y) {
+                for (int32_t x = 0; x < static_cast<int32_t>(silhouette.width); ++x) {
+                    if (getRasterPixel(pass.value.raster, x, y).a == 0) {
+                        continue;
+                    }
+                    if (clipped && getRasterPixel(clipBase, x, y).a == 0) {
+                        continue;
+                    }
+                    // Only the shape matters, so one opaque colour says it.
+                    setRasterPixel(silhouette, x, y, Color{255, 255, 255, 255});
+                }
+            }
+        }
+        if (debug) {
+            result.trace.push_back("built the sprite silhouette for its outlines");
+        }
+    }
+
+    for (LayerId layerId : order.value) {
+        auto compiled = compileLayerWithin(layerId, resolved,
+                                           wantsSilhouette ? &silhouette : nullptr, false);
         if (compiled.fail()) {
             return Result<CompileResult>::err(compiled.error);
         }
@@ -2573,7 +2694,8 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         RasterBuffer clipMask;
         bool hasClip = false;
         if (layer->clipBase.valid()) {
-            auto base = compileLayer(layer->clipBase, resolved);
+            auto base = compileLayerWithin(layer->clipBase, resolved,
+                                           wantsSilhouette ? &silhouette : nullptr, false);
             if (base.ok()) {
                 clipMask = base.value.raster;
                 hasClip = true;

@@ -167,6 +167,10 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_package_tests PRIVATE livesprite)
     add_test(NAME livesprite_package COMMAND livesprite_package_tests)
 
+    add_executable(livesprite_outline_tests tests/outline_tests.cpp)
+    target_link_libraries(livesprite_outline_tests PRIVATE livesprite)
+    add_test(NAME livesprite_outline COMMAND livesprite_outline_tests)
+
     add_executable(livesprite_frame_tests tests/frame_tests.cpp)
     target_link_libraries(livesprite_frame_tests PRIVATE livesprite)
     add_test(NAME livesprite_frame COMMAND livesprite_frame_tests)
