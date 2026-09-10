@@ -47,13 +47,6 @@ json::Value enc(Vec2f value) {
     return out;
 }
 
-json::Value enc(Vec2i value) {
-    json::Value out = json::Value::array();
-    out.push(enc(value.x));
-    out.push(enc(value.y));
-    return out;
-}
-
 json::Value enc(Color value) {
     json::Value out = json::Value::array();
     out.push(enc(static_cast<uint32_t>(value.r)));
@@ -71,20 +64,28 @@ json::Value enc(const Mat3f& value) {
     return out;
 }
 
-json::Value enc(Rect2i value) {
-    json::Value out = json::Value::array();
-    out.push(enc(value.min.x));
-    out.push(enc(value.min.y));
-    out.push(enc(value.max.x));
-    out.push(enc(value.max.y));
-    return out;
-}
-
 template<typename Tag>
 json::Value enc(TypedId<Tag> value) { return enc(value.value); }
 
 template<typename E, typename std::enable_if<std::is_enum<E>::value, int>::type = 0>
 json::Value enc(E value) { return enc(static_cast<uint32_t>(value)); }
+
+// Declared before the template that calls them, and that is not tidiness.
+//
+// enc(const std::vector<T>&) below calls enc on the element. That call is
+// dependent, so a conforming compiler resolves it in two phases: names not
+// found by argument-dependent lookup must be visible where the template is
+// *defined*, not merely where it is instantiated. These overloads live in an
+// anonymous namespace, so ADL on ls::RampStop never reaches them -- and
+// without these declarations the definitions further down are invisible.
+//
+// MSVC accepted it without /permissive-, which is why this survived every
+// local build and failed on the first GCC and Clang run.
+json::Value enc(const CurveDesc::Segment& segment);
+json::Value enc(const RampStop& stop);
+json::Value enc(const PluginValue& value);
+json::Value enc(const PluginParams& params);
+json::Value enc(const IntervalSet& set);
 
 template<typename T>
 json::Value enc(const std::vector<T>& values) {
@@ -169,10 +170,8 @@ struct DecodeContext {
 
 void dec(const json::Value& value, const DecodeContext&, bool& out)     { out = value.asBool(out); }
 void dec(const json::Value& value, const DecodeContext&, float& out)    { out = static_cast<float>(value.asNumber(out)); }
-void dec(const json::Value& value, const DecodeContext&, double& out)   { out = value.asNumber(out); }
 void dec(const json::Value& value, const DecodeContext&, int32_t& out)  { out = static_cast<int32_t>(value.asNumber(out)); }
 void dec(const json::Value& value, const DecodeContext&, uint32_t& out) { out = static_cast<uint32_t>(value.asNumber(out)); }
-void dec(const json::Value& value, const DecodeContext&, uint64_t& out) { out = static_cast<uint64_t>(value.asNumber(static_cast<double>(out))); }
 void dec(const json::Value& value, const DecodeContext&, int64_t& out)  { out = static_cast<int64_t>(value.asNumber(static_cast<double>(out))); }
 void dec(const json::Value& value, const DecodeContext&, std::string& out) {
     if (value.isString()) {
@@ -181,13 +180,6 @@ void dec(const json::Value& value, const DecodeContext&, std::string& out) {
 }
 
 void dec(const json::Value& value, const DecodeContext& ctx, Vec2f& out) {
-    if (value.isArray() && value.items().size() >= 2) {
-        dec(value.items()[0], ctx, out.x);
-        dec(value.items()[1], ctx, out.y);
-    }
-}
-
-void dec(const json::Value& value, const DecodeContext& ctx, Vec2i& out) {
     if (value.isArray() && value.items().size() >= 2) {
         dec(value.items()[0], ctx, out.x);
         dec(value.items()[1], ctx, out.y);
@@ -211,15 +203,6 @@ void dec(const json::Value& value, const DecodeContext&, Mat3f& out) {
     }
 }
 
-void dec(const json::Value& value, const DecodeContext& ctx, Rect2i& out) {
-    if (value.isArray() && value.items().size() >= 4) {
-        dec(value.items()[0], ctx, out.min.x);
-        dec(value.items()[1], ctx, out.min.y);
-        dec(value.items()[2], ctx, out.max.x);
-        dec(value.items()[3], ctx, out.max.y);
-    }
-}
-
 template<typename Tag>
 void dec(const json::Value& value, const DecodeContext& ctx, TypedId<Tag>& out) {
     out.value = ctx.mapId(static_cast<uint64_t>(value.asNumber(0.0)));
@@ -229,6 +212,13 @@ template<typename E, typename std::enable_if<std::is_enum<E>::value, int>::type 
 void dec(const json::Value& value, const DecodeContext&, E& out) {
     out = static_cast<E>(static_cast<uint32_t>(value.asNumber(static_cast<double>(out))));
 }
+
+// Declared ahead of the template for the same reason as the enc overloads.
+void dec(const json::Value& value, const DecodeContext& ctx, CurveDesc::Segment& out);
+void dec(const json::Value& value, const DecodeContext& ctx, RampStop& out);
+void dec(const json::Value& value, const DecodeContext& ctx, PluginValue& out);
+void dec(const json::Value& value, const DecodeContext& ctx, PluginParams& out);
+void dec(const json::Value& value, const DecodeContext&, IntervalSet& out);
 
 template<typename T>
 void dec(const json::Value& value, const DecodeContext& ctx, std::vector<T>& out) {

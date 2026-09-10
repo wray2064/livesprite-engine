@@ -53,7 +53,14 @@ target_include_directories(livesprite
 # the golden hashes diverge. /fp:precise and -ffp-contract=off pin it. Fast-math
 # is never acceptable here, at any optimisation level.
 if (MSVC)
-    target_compile_options(livesprite PRIVATE /W4 /WX /GR- /fp:precise)
+    # /permissive- turns on two-phase name lookup, so MSVC resolves templates
+    # the way GCC and Clang do. Without it, a template calling an overload
+    # declared later in the file compiles here and fails everywhere else --
+    # which is exactly how the serializer reached CI.
+    # /we4505 promotes "unreferenced function with internal linkage" to an
+    # error, matching -Werror=unused-function on the other three.
+    target_compile_options(livesprite PRIVATE
+        /W4 /WX /GR- /fp:precise /permissive- /we4505)
 else()
     target_compile_options(livesprite PRIVATE
         -Wall -Wextra -Wpedantic -Werror -fno-rtti -ffp-contract=off)
@@ -100,7 +107,8 @@ if (LS_BUILD_SHARED_C)
         POSITION_INDEPENDENT_CODE ON)
 
     if (MSVC)
-        target_compile_options(livesprite_c PRIVATE /W4 /WX /GR- /fp:precise)
+        target_compile_options(livesprite_c PRIVATE
+            /W4 /WX /GR- /fp:precise /permissive- /we4505)
     else()
         target_compile_options(livesprite_c PRIVATE
             -Wall -Wextra -Wpedantic -Werror -fno-rtti -ffp-contract=off)
