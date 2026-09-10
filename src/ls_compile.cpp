@@ -916,12 +916,6 @@ Color ditherRampColor(const RampData* ramp, float value, float threshold) {
     return fraction > threshold ? stops[lower + 1].color : stops[lower].color;
 }
 
-// Legacy helper kept for the fills that only need a threshold.
-float patternThreshold(const PatternData* pattern, int32_t x, int32_t y, Vec2f origin, float phase) {
-    return samplePattern(pattern, static_cast<float>(x), static_cast<float>(y),
-                         origin, phase).threshold;
-}
-
 // A mark: coverage plus a per-pixel colour function, ready to composite.
 //
 // A patterned mark also records how it is anchored. Local marks are finished at
