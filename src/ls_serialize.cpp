@@ -170,7 +170,6 @@ struct DecodeContext {
 
 void dec(const json::Value& value, const DecodeContext&, bool& out)     { out = value.asBool(out); }
 void dec(const json::Value& value, const DecodeContext&, float& out)    { out = static_cast<float>(value.asNumber(out)); }
-void dec(const json::Value& value, const DecodeContext&, int32_t& out)  { out = static_cast<int32_t>(value.asNumber(out)); }
 void dec(const json::Value& value, const DecodeContext&, uint32_t& out) { out = static_cast<uint32_t>(value.asNumber(out)); }
 void dec(const json::Value& value, const DecodeContext&, int64_t& out)  { out = static_cast<int64_t>(value.asNumber(static_cast<double>(out))); }
 void dec(const json::Value& value, const DecodeContext&, std::string& out) {
