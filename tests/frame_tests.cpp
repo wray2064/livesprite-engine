@@ -341,6 +341,74 @@ void testTheEngineSaysWhichFrameChanged() {
     LS_CHECK(dirty(f.sprite));
 }
 
+
+// A sheet packs many frames into one image, and every cell is compiled on its
+// own and then composited. The question that decides how an editor writes one
+// is what a pattern does at the cell boundary, and exportOrigin is the control:
+// it says where this output frame sits inside something larger.
+void testExportOriginMovesAPatternLattice() {
+    Fixture f;
+    LS_REQUIRE(f.build());
+
+    // A dithered fill anchored Local in Export space -- the one combination
+    // that reads exportOrigin at all.
+    RampDesc ramp;
+    ramp.stops = { { 0.f, Color{ 20, 30, 60, 255 } },
+                   { 1.f, Color{ 250, 180, 90, 255 } } };
+    auto made = f.engine->createRamp(f.doc, ramp);
+    LS_REQUIRE(made.ok());
+    auto pattern = f.engine->createDitherPattern(f.doc, DitherPatternKind::Bayer4);
+    LS_REQUIRE(pattern.ok());
+
+    FillDitherOp dither;
+    dither.targetRegion = f.region;
+    dither.ramp = made.value;
+    dither.pattern = pattern.value;
+    dither.density = 0.5f;
+    dither.anchor = PatternAnchor::Local;
+    dither.coordinateSpace = CoordinateSpace::Export;
+
+    auto layer = f.engine->createLayer(f.sprite, { "Dithered" });
+    LS_REQUIRE(layer.ok());
+    LS_REQUIRE(f.engine->addOperation(layer.value, dither).ok());
+
+    const auto at = [&](int32_t x, int32_t y) {
+        CompileProfile profile;
+        profile.type = CompileProfileType::Export;
+        profile.outputWidth = 16;
+        profile.outputHeight = 16;
+        profile.palette = PalettePolicy::Unconstrained;
+        profile.exportOrigin = { x, y };
+        auto compiled = f.engine->compileSprite(f.sprite, profile);
+        return compiled.ok() ? compiled.value.raster : RasterBuffer{};
+    };
+
+    const RasterBuffer origin = at(0, 0);
+    LS_REQUIRE(!origin.empty());
+
+    // Moving the frame by one pixel moves the lattice under it, so the same
+    // drawing resolves to different pixels. This is the whole mechanism.
+    LS_CHECK(!sameBytes(origin, at(1, 0)));
+
+    // Moving it by a whole tile puts the lattice back where it was: a 4x4
+    // pattern has period 4.
+    LS_CHECK(sameBytes(origin, at(4, 0)));
+    LS_CHECK(sameBytes(origin, at(0, 4)));
+    LS_CHECK(sameBytes(origin, at(16, 32)));
+
+    // And a frame that ignores the export frame is unmoved by any of it, which
+    // is what makes a cell reproduce a single-frame export exactly.
+    auto operations = f.engine->getLayerOperations(layer.value);
+    LS_REQUIRE(operations.ok() && !operations.value.empty());
+    LS_REQUIRE(f.engine->setOperationParameter(
+        operations.value.front().id, "coordinateSpace",
+        static_cast<int64_t>(CoordinateSpace::Canvas)).ok());
+
+    const RasterBuffer fixed = at(0, 0);
+    LS_CHECK(sameBytes(fixed, at(1, 0)));
+    LS_CHECK(sameBytes(fixed, at(37, 91)));
+}
+
 } // namespace
 
 int main() {
@@ -351,5 +419,6 @@ int main() {
     testFramesCanBeReordered();
     testABadOrderIsRefused();
     testTheEngineSaysWhichFrameChanged();
+    testExportOriginMovesAPatternLattice();
     return lstest::report("frames");
 }
