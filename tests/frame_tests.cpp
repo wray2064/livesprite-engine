@@ -290,6 +290,57 @@ void testABadOrderIsRefused() {
     LS_CHECK(f.engine->getDocumentInfo(f.doc).value.sprites == before);
 }
 
+
+// An editor showing many frames at once -- a timeline strip, an onion skin --
+// cannot afford to recompile every frame when one of them changes. It needs to
+// ask which ones actually changed, and this is that question.
+//
+// The promises: a fresh sprite is dirty, compiling it makes it clean, editing
+// it makes it dirty again, and editing one frame does not dirty its neighbours.
+void testTheEngineSaysWhichFrameChanged() {
+    Fixture f;
+    LS_REQUIRE(f.build());
+
+    auto other = f.engine->cloneSprite(f.sprite);
+    LS_REQUIRE(other.ok());
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Preview;
+    profile.outputWidth = 16;
+    profile.outputHeight = 16;
+    profile.palette = PalettePolicy::Unconstrained;
+
+    auto dirty = [&](SpriteId id) {
+        auto state = f.engine->isDirty(id.value);
+        return state.ok() && state.value;
+    };
+
+    LS_REQUIRE(f.engine->compileSprite(f.sprite, profile).ok());
+    LS_REQUIRE(f.engine->compileSprite(other.value, profile).ok());
+    LS_CHECK(!dirty(f.sprite));                 // a compiled sprite is clean
+    LS_CHECK(!dirty(other.value));
+
+    // Change what one frame draws.
+    auto layers = f.engine->getSpriteInfo(f.sprite);
+    LS_REQUIRE(layers.ok() && !layers.value.layers.empty());
+    auto operations = f.engine->getLayerOperations(layers.value.layers.front());
+    LS_REQUIRE(operations.ok() && !operations.value.empty());
+    LS_REQUIRE(f.engine->setOperationParameter(operations.value.front().id,
+                                               "opacity", 0.5f).ok());
+
+    LS_CHECK(dirty(f.sprite));
+    // The one that matters for a timeline: the frame beside it did not change.
+    LS_CHECK(!dirty(other.value));
+
+    LS_REQUIRE(f.engine->compileSprite(f.sprite, profile).ok());
+    LS_CHECK(!dirty(f.sprite));
+
+    // Moving the geometry a region tracks has to reach the sprite that draws it,
+    // or an editor caching by this flag would show a stale picture.
+    LS_REQUIRE(f.engine->updateRect(f.geometry, { { 6.f, 6.f }, 6.f, 6.f, 0.f }).ok());
+    LS_CHECK(dirty(f.sprite));
+}
+
 } // namespace
 
 int main() {
@@ -299,5 +350,6 @@ int main() {
     testFramesSurviveARoundTrip();
     testFramesCanBeReordered();
     testABadOrderIsRefused();
+    testTheEngineSaysWhichFrameChanged();
     return lstest::report("frames");
 }
