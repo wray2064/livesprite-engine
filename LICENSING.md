@@ -119,6 +119,54 @@ be relicensed without asking them — and in five years, they may be unreachable
 
 So contributions require the sign-off described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Who the Licensor is, and why it is a person
+
+The Licensor in [LICENSE](LICENSE) is **Israel Mayén Jiménez (Manic Trash Panda
+Software Labs)** -- a person, with the name the work is published under in
+parentheses.
+
+That is deliberate and temporary. Manic Trash Panda Software Labs is being
+registered as a company and is not yet registered. Until it is, it is not a legal
+person: it cannot hold copyright, and it cannot grant a licence or sign a
+commercial one. Naming it as Licensor now would name something that cannot do
+what a Licensor has to do. The copyright is held by the individual, so the
+individual is the Licensor, and the trade name says which banner the work sits
+under without claiming an entity exists.
+
+### What changes when the company exists
+
+This is tracked as an issue in the repository so it is not forgotten. The steps,
+so the issue does not have to be reconstructed from memory:
+
+1. **A written assignment of copyright** from the individual to the company,
+   covering the engine as of that date. This is a legal document and should be
+   prepared by a lawyer, not improvised.
+2. **The assignment must cover the contribution grants.** Contributions arrive
+   with a sign-off granting the maintainers the right to license them under the
+   terms here (see [CONTRIBUTING.md](CONTRIBUTING.md)). The assignment should
+   make explicit that those grants move with the copyright, so the company can
+   keep the Change Date promise and offer commercial licences for the whole
+   work, not only the lines the individual wrote.
+3. **Two lines in LICENSE change** -- `Licensor:` and the copyright line under
+   `Licensed Work:` -- to name the company. Nothing else in the file does.
+4. **That is a new version of the Licensed Work.** BSL applies separately to each
+   version, and the four-year clock is per version, so versions published under
+   the individual's name keep the Change Date they were published with.
+5. **The contact address** may change to one on a company domain at the same
+   time. It is in LICENSE and nowhere else.
+
+Sprit's'fast needs no change: its copyright is "the Sprit's'fast authors", which
+is not a legal person and was never meant to be one -- Apache-2.0 does not need
+a named Licensor.
+
+### Before relying on the Additional Use Grant commercially
+
+The grant in LICENSE is doing real work: it is what separates "build an editor
+on this" (allowed) from "offer this as an engine" and "embed this in a shipped
+game" (reserved). It was drafted with care and without a lawyer. Before a
+commercial licence is sold on the strength of what it reserves, it should be
+read by one. The same appointment can prepare the assignment above.
+
 ## Commercial licensing
 
 For run-time embedding in shipped games, for building products the Additional Use
