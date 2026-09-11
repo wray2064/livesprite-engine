@@ -135,8 +135,9 @@ under without claiming an entity exists.
 
 ### What changes when the company exists
 
-This is tracked as an issue in the repository so it is not forgotten. The steps,
-so the issue does not have to be reconstructed from memory:
+This is tracked as [issue #1](https://github.com/wray2064/livesprite-engine/issues/1)
+so it is not forgotten. The steps, so the issue does not have to be reconstructed
+from memory:
 
 1. **A written assignment of copyright** from the individual to the company,
    covering the engine as of that date. This is a legal document and should be
@@ -165,7 +166,8 @@ The grant in LICENSE is doing real work: it is what separates "build an editor
 on this" (allowed) from "offer this as an engine" and "embed this in a shipped
 game" (reserved). It was drafted with care and without a lawyer. Before a
 commercial licence is sold on the strength of what it reserves, it should be
-read by one. The same appointment can prepare the assignment above.
+read by one. The same appointment can prepare the assignment above. This is
+[issue #2](https://github.com/wray2064/livesprite-engine/issues/2).
 
 ## Commercial licensing
 
