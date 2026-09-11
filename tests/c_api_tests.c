@@ -466,6 +466,99 @@ static void test_frames(void) {
     ls_context_destroy(ctx);
 }
 
+
+/* A ramp whose stops name palette roles follows a palette change, and the
+ * palette can lose a slot and label one. The four calls this exercises are
+ * the ones a palette panel needs and the ABI did not have. */
+static void test_palette_roles(void) {
+    ls_context* ctx = ls_context_create();
+    ls_id doc = 0, sprite = 0, layer = 0, rect = 0, region = 0, fill = 0;
+    ls_id palette = 0, ramp = 0, pattern = 0;
+    ls_raster* raster = NULL;
+    uint32_t roles[2] = { 1u, 2u };
+    ls_color colors[2];
+    float positions[2] = { 0.0f, 1.0f };
+    ls_color night;
+    int used = 0;
+    size_t i, saw_night = 0, saw_day = 0;
+
+    CHECK(ctx != NULL);
+    if (ctx == NULL) { return; }
+
+    colors[0].r = 20;  colors[0].g = 30;  colors[0].b = 60;  colors[0].a = 255;
+    colors[1].r = 240; colors[1].g = 200; colors[1].b = 120; colors[1].a = 255;
+
+    CHECK_OK(ls_document_create(ctx, "roles", 16, 16, &doc));
+    CHECK_OK(ls_sprite_create(ctx, doc, &sprite));
+    CHECK_OK(ls_palette_create(ctx, doc, "day", roles, colors, 2, &palette));
+    CHECK_OK(ls_sprite_bind_palette(ctx, sprite, palette));
+    CHECK_OK(ls_palette_set_label(ctx, palette, 1u, "shade"));
+
+    CHECK_OK(ls_layer_create(ctx, sprite, "d", &layer));
+    {
+        ls_vec2f origin; origin.x = 0.0f; origin.y = 0.0f;
+        CHECK_OK(ls_geometry_rect(ctx, doc, origin, 16.0f, 16.0f, 0.0f, &rect));
+    }
+    CHECK_OK(ls_region_from_geometry(ctx, rect, &region));
+
+    /* The ramp names the roles, not the colours. */
+    CHECK_OK(ls_ramp_create_roles(ctx, doc, "r", positions, colors, roles, 2, 1, &ramp));
+    CHECK_OK(ls_dither_pattern_create(ctx, doc, LS_DITHER_BAYER2, &pattern));
+    CHECK_OK(ls_operation_add(ctx, layer, "FillDitherOp", -1, &fill));
+    CHECK_OK(ls_operation_set_id(ctx, fill, "targetRegion", region));
+    CHECK_OK(ls_operation_set_id(ctx, fill, "ramp", ramp));
+    CHECK_OK(ls_operation_set_id(ctx, fill, "pattern", pattern));
+
+    /* Something now names role 1, and nothing names role 9. */
+    CHECK_OK(ls_document_uses_palette_role(ctx, doc, 1u, &used));
+    CHECK(used == 1);
+    CHECK_OK(ls_document_uses_palette_role(ctx, doc, 9u, &used));
+    CHECK(used == 0);
+
+    /* Change the dark slot and the dither changes with it. */
+    night.r = 60; night.g = 20; night.b = 20; night.a = 255;
+    CHECK_OK(ls_palette_set_color(ctx, palette, 1u, night));
+    {
+        ls_profile profile = export_profile(16);
+        CHECK_OK(ls_compile_sprite(ctx, sprite, &profile, &raster));
+    }
+    {
+        const uint8_t* px = ls_raster_data(raster);
+        for (i = 0; i < 16u * 16u; ++i) {
+            if (px[i * 4] == 60 && px[i * 4 + 1] == 20) { ++saw_night; }
+            if (px[i * 4] == 20 && px[i * 4 + 1] == 30) { ++saw_day; }
+        }
+    }
+    CHECK(saw_night > 0);
+    CHECK(saw_day == 0);
+    ls_raster_release(raster);
+    raster = NULL;
+
+    /* Take the slot out: the stop falls back to its literal. */
+    CHECK_OK(ls_palette_remove_color(ctx, palette, 1u));
+    CHECK(ls_palette_remove_color(ctx, palette, 1u) != LS_OK);   /* gone already */
+    {
+        ls_profile profile = export_profile(16);
+        CHECK_OK(ls_compile_sprite(ctx, sprite, &profile, &raster));
+    }
+    {
+        const uint8_t* px = ls_raster_data(raster);
+        saw_day = 0;
+        for (i = 0; i < 16u * 16u; ++i) {
+            if (px[i * 4] == 20 && px[i * 4 + 1] == 30) { ++saw_day; }
+        }
+    }
+    /* Half the pixels, because a Bayer2 screen at half density is a checker,
+     * and the removed slot's stop reverted to its literal rather than to
+     * nothing. This is also the check that caught the palette policy being
+     * mirrored backwards: with NEAREST silently in force, the shrunken palette
+     * snapped every pixel to its one remaining colour. */
+    CHECK(saw_day == 128);
+    ls_raster_release(raster);
+
+    ls_context_destroy(ctx);
+}
+
 int main(void) {
     test_version_and_errors();
     test_boundary_is_defensive();
@@ -477,6 +570,7 @@ int main(void) {
     test_snapshot_restore();
     test_metadata();
     test_frames();
+    test_palette_roles();
 
     if (failures == 0) {
         printf("c_api: all checks passed\n");

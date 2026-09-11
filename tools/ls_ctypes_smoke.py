@@ -43,7 +43,10 @@ class Profile(ctypes.Structure):
 
 LS_OK = 0
 LS_PROFILE_EXPORT = 1
-LS_PALETTE_UNCONSTRAINED = 0
+# Mirrors the C header, which mirrors ls::PalettePolicy; the C header pins the
+# values with static_asserts, and this file has to be kept to it by hand. The
+# first version of this line said 0, which is NEAREST.
+LS_PALETTE_UNCONSTRAINED = 2
 
 
 def load(path):

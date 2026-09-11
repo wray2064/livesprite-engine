@@ -51,6 +51,37 @@ Vec2i  toVec2i(ls_vec2i v)  { return { v.x, v.y }; }
 Color  toColor(ls_color c)  { return { c.r, c.g, c.b, c.a }; }
 ls_color fromColor(Color c) { return { c.r, c.g, c.b, c.a }; }
 
+// Every enum the C header mirrors is pinned here. A mirror kept by hand drifts
+// the first time somebody reorders one side, and a cast then means the wrong
+// thing with no diagnostic at all; the palette policy did exactly that. These
+// turn the drift into a build failure.
+static_assert(LS_PROFILE_PREVIEW     == static_cast<int>(CompileProfileType::Preview), "");
+static_assert(LS_PROFILE_EXPORT      == static_cast<int>(CompileProfileType::Export), "");
+static_assert(LS_PROFILE_DEBUG       == static_cast<int>(CompileProfileType::Debug), "");
+static_assert(LS_PROFILE_MASK_ONLY   == static_cast<int>(CompileProfileType::MaskOnly), "");
+static_assert(LS_PROFILE_BOUNDS_ONLY == static_cast<int>(CompileProfileType::BoundsOnly), "");
+
+static_assert(LS_PALETTE_NEAREST       == static_cast<int>(PalettePolicy::NearestMatch), "");
+static_assert(LS_PALETTE_STRICT        == static_cast<int>(PalettePolicy::ExactMatch), "");
+static_assert(LS_PALETTE_UNCONSTRAINED == static_cast<int>(PalettePolicy::Unconstrained), "");
+
+static_assert(LS_PARAM_UNSUPPORTED == static_cast<int>(ParameterType::Unsupported), "");
+static_assert(LS_PARAM_BOOL        == static_cast<int>(ParameterType::Bool), "");
+static_assert(LS_PARAM_INT         == static_cast<int>(ParameterType::Int), "");
+static_assert(LS_PARAM_FLOAT       == static_cast<int>(ParameterType::Float), "");
+static_assert(LS_PARAM_VEC2        == static_cast<int>(ParameterType::Vec2), "");
+static_assert(LS_PARAM_COLOR       == static_cast<int>(ParameterType::Color), "");
+static_assert(LS_PARAM_MATRIX      == static_cast<int>(ParameterType::Matrix), "");
+static_assert(LS_PARAM_TEXT        == static_cast<int>(ParameterType::Text), "");
+static_assert(LS_PARAM_ID          == static_cast<int>(ParameterType::EntityId), "");
+
+static_assert(LS_DITHER_BAYER2           == static_cast<int>(DitherPatternKind::Bayer2), "");
+static_assert(LS_DITHER_BAYER4           == static_cast<int>(DitherPatternKind::Bayer4), "");
+static_assert(LS_DITHER_BAYER8           == static_cast<int>(DitherPatternKind::Bayer8), "");
+static_assert(LS_DITHER_CHECKER          == static_cast<int>(DitherPatternKind::Checker), "");
+static_assert(LS_DITHER_HORIZONTAL_LINES == static_cast<int>(DitherPatternKind::HorizontalLines), "");
+static_assert(LS_DITHER_VERTICAL_LINES   == static_cast<int>(DitherPatternKind::VerticalLines), "");
+
 CompileProfile toProfile(const ls_profile& in) {
     CompileProfile profile;
     profile.type = static_cast<CompileProfileType>(in.type);

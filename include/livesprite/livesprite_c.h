@@ -108,10 +108,14 @@ typedef struct { uint8_t r, g, b, a; } ls_color;
 #define LS_PROFILE_MASK_ONLY  3
 #define LS_PROFILE_BOUNDS_ONLY 4
 
-/* Palette policies, mirroring ls::PalettePolicy. */
-#define LS_PALETTE_UNCONSTRAINED 0
+/* Palette policies, mirroring ls::PalettePolicy. The values are pinned to the
+ * C++ enum by static_asserts in ls_c_api.cpp, so reordering either side fails
+ * the build rather than quietly meaning something else -- which is what the
+ * first version of this block did: it had UNCONSTRAINED and NEAREST swapped,
+ * so every caller asking for unconstrained output got quantised. */
+#define LS_PALETTE_NEAREST       0
 #define LS_PALETTE_STRICT        1
-#define LS_PALETTE_NEAREST       2
+#define LS_PALETTE_UNCONSTRAINED 2
 
 typedef struct {
     int32_t  type;            /* LS_PROFILE_*                                */
@@ -300,7 +304,16 @@ LS_C_API ls_error ls_ramp_create_roles(ls_context* ctx, ls_id document, const ch
                                        const uint32_t* roles, size_t stop_count,
                                        int interpolate, ls_id* out_ramp);
 
-/* One of the built-in threshold matrices. kind mirrors ls::DitherPatternKind. */
+/* The built-in threshold matrices, mirroring ls::DitherPatternKind and pinned
+ * to it the same way. */
+#define LS_DITHER_BAYER2            0
+#define LS_DITHER_BAYER4            1
+#define LS_DITHER_BAYER8            2
+#define LS_DITHER_CHECKER           3
+#define LS_DITHER_HORIZONTAL_LINES  4
+#define LS_DITHER_VERTICAL_LINES    5
+
+/* One of the built-in threshold matrices; kind is an LS_DITHER_* value. */
 LS_C_API ls_error ls_dither_pattern_create(ls_context* ctx, ls_id document, int32_t kind,
                                            ls_id* out_pattern);
 
