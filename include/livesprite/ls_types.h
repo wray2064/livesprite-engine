@@ -62,6 +62,29 @@ constexpr uint32_t LS_ENGINE_VERSION =
 // represent what it is being asked for.
 constexpr uint32_t kCanvasDimensionCeiling = 1u << 29;
 
+// The most bytes a raster may hold: 2 GiB, which is 23170 x 23170 in RGBA.
+//
+// The dimension ceiling above is about representation -- past it the stride
+// overflows. This one is about survival. Below the dimension ceiling a raster
+// can still be 2^60 bytes, and the engine used to leave that to the allocator
+// on the theory that it would refuse. It does not, reliably: macOS, and Linux
+// under permissive overcommit, hand back an address for 68 GB and only fail
+// when the zero-fill touches the pages, at which point the process is killed
+// rather than told. A ceiling checked in arithmetic, before any allocation, is
+// the only refusal that arrives as an error code on every platform.
+//
+// Two GiB is above anything the canvas policy admits (16384 x 16384 is one)
+// and below anything a consumer of a sprite engine could do with.
+constexpr uint64_t kRasterByteCeiling = 1ull << 31;
+
+// True when a raster of this size may be allocated at all. The check every
+// allocation path makes, in one place, so the two cannot disagree.
+constexpr bool rasterSizeAllowed(uint32_t width, uint32_t height) {
+    return width != 0 && height != 0 &&
+           width < kCanvasDimensionCeiling && height < kCanvasDimensionCeiling &&
+           static_cast<uint64_t>(width) * height * 4ull <= kRasterByteCeiling;
+}
+
 // The *policy* is a judgement about cost, and it belongs to the application.
 // These are the defaults -- chosen by measuring this engine, see below -- and an
 // application changes them with setCanvasLimits. An editor for small sprites may
@@ -416,13 +439,13 @@ inline RasterBuffer makeRaster(uint32_t width, uint32_t height) {
     // This is the ceiling, not the policy: an application's own limit is checked
     // where documents are made, while this is the line below which the engine
     // can still describe what it holds.
-    if (width >= kCanvasDimensionCeiling || height >= kCanvasDimensionCeiling) {
+    if (!rasterSizeAllowed(width, height)) {
         return raster;
     }
-    // Sizes below the ceiling are representable but not necessarily allocatable,
-    // and this is a header-inline helper an application calls directly. An empty
-    // raster is a far better answer than a bad_alloc thrown into somebody's
-    // paint loop.
+    // Sizes under the ceilings are ones a machine can be expected to hold, but
+    // this is a header-inline helper an application calls directly, and an
+    // empty raster is still a far better answer than a bad_alloc thrown into
+    // somebody's paint loop.
     try {
         raster.pixels.assign(static_cast<size_t>(width) * height * 4, 0);
     } catch (...) {

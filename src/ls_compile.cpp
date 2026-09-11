@@ -37,11 +37,11 @@ Result<RasterBuffer> allocateRaster(uint32_t width, uint32_t height) {
         return Result<RasterBuffer>::err(LSError::InvalidParameter);
     }
     // A compile profile carries its own output size, so this is reachable
-    // without going anywhere near a document's canvas. Past 2^30 the stride
-    // below overflows its 32 bits and the raster ends up claiming a size its
-    // storage does not have; well before that, the allocation is one no machine
-    // will satisfy.
-    if (width >= kCanvasDimensionCeiling || height >= kCanvasDimensionCeiling) {
+    // without going anywhere near a document's canvas. The same check as
+    // makeRaster: the dimension ceiling keeps the stride representable, and
+    // the byte ceiling refuses in arithmetic what an overcommitting allocator
+    // would accept and then be killed for.
+    if (!rasterSizeAllowed(width, height)) {
         return Result<RasterBuffer>::err(LSError::InvalidParameter);
     }
     RasterBuffer raster;

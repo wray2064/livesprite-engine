@@ -204,10 +204,32 @@ void testTheReaderUsesTheReadersPolicy() {
     LS_CHECK(peer->deserializeDocument(saved.value).ok());
 }
 
+// The refusal that has to happen in arithmetic. A 131136 x 131136 raster is
+// under the dimension ceiling and 68 GB. On Windows the allocator refuses it
+// and bad_alloc is caught; on macOS the allocator hands it over and the
+// zero-fill is what dies, by SIGKILL, a minute later. So the check cannot be
+// left to the allocator, and this test is the one that would hang and be
+// killed rather than fail if it were.
+void testAnAbsurdRasterIsRefusedBeforeAnyAllocation() {
+    LS_CHECK(!rasterSizeAllowed(131136, 131136));
+    LS_CHECK(!rasterSizeAllowed(65536, 65536));       // 16 GiB
+    LS_CHECK(!rasterSizeAllowed(23171, 23171));       // just over 2 GiB
+    LS_CHECK(rasterSizeAllowed(23170, 23170));        // just under
+    LS_CHECK(rasterSizeAllowed(16384, 16384));        // the policy's own maximum
+    LS_CHECK(rasterSizeAllowed(1, 1));
+    LS_CHECK(!rasterSizeAllowed(0, 16));
+
+    // And the helper honours it: an empty raster back, not a dead process.
+    const RasterBuffer refused = makeRaster(131136, 131136);
+    LS_CHECK(refused.empty());
+    LS_CHECK(refused.width == 0 && refused.height == 0);
+}
+
 } // namespace
 
 int main() {
     testARasterNeverLiesAboutItsSize();
+    testAnAbsurdRasterIsRefusedBeforeAnyAllocation();
     testCanvasSizesAreBounded();
     testResizeIsBoundedToo();
     testCompileOutputIsBounded();
