@@ -2374,6 +2374,99 @@ VoidResult LSContext::setPaletteColor(PaletteId palette, ColorRole role, Color c
     return VoidResult::success();
 }
 
+VoidResult LSContext::removePaletteColor(PaletteId palette, ColorRole role) {
+    PaletteData* data = impl_->findPalette(palette);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (data->colors.erase(role) == 0) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    data->labels.erase(role);
+    ++impl_->resourceRevision;
+    impl_->markDirtyInternal(palette.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::setPaletteLabel(PaletteId palette, ColorRole role,
+                                      std::string_view label) {
+    PaletteData* data = impl_->findPalette(palette);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (data->colors.find(role) == data->colors.end()) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    // A label reaches the save file and a panel, never the pixels, so nothing
+    // is dirtied by renaming.
+    if (label.empty()) {
+        data->labels.erase(role);
+    } else {
+        data->labels[role] = std::string(label);
+    }
+    return VoidResult::success();
+}
+
+Result<bool> LSContext::usesPaletteRole(DocumentId doc, ColorRole role) const {
+    const DocumentData* document = impl_->findDocument(doc);
+    if (document == nullptr) {
+        return Result<bool>::err(LSError::InvalidId);
+    }
+    if (role == kColorRoleNone) {
+        return Result<bool>::ok(false);
+    }
+
+    // Regions carry a standing role.
+    for (RegionId regionId : document->regions) {
+        const RegionData* region = impl_->findRegion(regionId);
+        if (region != nullptr && region->role == role) {
+            return Result<bool>::ok(true);
+        }
+    }
+    // Ramp stops may name one.
+    for (RampId rampId : document->ramps) {
+        const RampData* ramp = impl_->findRamp(rampId);
+        if (ramp == nullptr) {
+            continue;
+        }
+        for (const RampStop& stop : ramp->desc.stops) {
+            if (stop.role == role) {
+                return Result<bool>::ok(true);
+            }
+        }
+    }
+    // And any operation with a paletteRole field. Walked through the same
+    // parameter interface the instructions use, so an operation added later is
+    // covered without a case here.
+    for (SpriteId spriteId : document->sprites) {
+        const SpriteData* sprite = impl_->findSprite(spriteId);
+        if (sprite == nullptr) {
+            continue;
+        }
+        for (LayerId layerId : sprite->layers) {
+            const LayerData* layer = impl_->findLayer(layerId);
+            if (layer == nullptr) {
+                continue;
+            }
+            for (OperationId opId : layer->operations) {
+                for (const char* field : { "paletteRole", "lineRole", "bgRole",
+                                           "foregroundRole", "backgroundRole" }) {
+                    auto value = getOperationParameter(opId, field);
+                    if (value.fail()) {
+                        continue;
+                    }
+                    if (const int64_t* held = std::get_if<int64_t>(&value.value)) {
+                        if (*held == static_cast<int64_t>(role)) {
+                            return Result<bool>::ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return Result<bool>::ok(false);
+}
+
 VoidResult LSContext::bindDocumentPalette(DocumentId doc, PaletteId palette) {
     DocumentData* document = impl_->findDocument(doc);
     if (document == nullptr || impl_->findPalette(palette) == nullptr) {
@@ -2519,6 +2612,14 @@ VoidResult LSContext::swapPalette(SpriteId sprite, PaletteId newPalette) {
     return bindSpritePalette(sprite, newPalette);
 }
 
+Result<RampDesc> LSContext::getRamp(RampId ramp) const {
+    const RampData* data = impl_->findRamp(ramp);
+    if (data == nullptr) {
+        return Result<RampDesc>::err(LSError::InvalidId);
+    }
+    return Result<RampDesc>::ok(data->desc);
+}
+
 VoidResult LSContext::remapRamp(RampId ramp, PaletteId fromPalette, PaletteId toPalette) {
     RampData* data = impl_->findRamp(ramp);
     const PaletteData* source = impl_->findPalette(fromPalette);
@@ -2527,9 +2628,14 @@ VoidResult LSContext::remapRamp(RampId ramp, PaletteId fromPalette, PaletteId to
         return VoidResult::err(LSError::InvalidId);
     }
 
-    // Each stop moves to the color that occupies the same role in the target
-    // palette; stops that do not match a source role snap to nearest.
+    // Each literal stop moves to the color that occupies the same role in the
+    // target palette; stops that do not match a source role snap to nearest.
+    // A stop that names a role is not a literal and follows the palette by
+    // itself, so it is left exactly as it is.
     for (RampStop& stop : data->desc.stops) {
+        if (stop.role != kColorRoleNone) {
+            continue;
+        }
         ColorRole matchedRole = kColorRoleNone;
         for (const auto& [role, color] : source->colors) {
             if (color == stop.color) {

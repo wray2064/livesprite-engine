@@ -109,6 +109,11 @@ json::Value enc(const RampStop& stop) {
     json::Value out = json::Value::object();
     out["position"] = enc(stop.position);
     out["color"] = enc(stop.color);
+    // Written only when set, so a file with literal stops reads exactly as it
+    // did before roles reached ramps.
+    if (stop.role != kColorRoleNone) {
+        out["role"] = enc(stop.role);
+    }
     return out;
 }
 
@@ -245,6 +250,7 @@ void dec(const json::Value& value, const DecodeContext& ctx, CurveDesc::Segment&
 void dec(const json::Value& value, const DecodeContext& ctx, RampStop& out) {
     if (const json::Value* position = value.find("position")) { dec(*position, ctx, out.position); }
     if (const json::Value* color = value.find("color"))       { dec(*color, ctx, out.color); }
+    if (const json::Value* role = value.find("role"))         { dec(*role, ctx, out.role); }
 }
 
 void dec(const json::Value& value, const DecodeContext& ctx, PluginValue& out) {

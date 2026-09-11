@@ -756,11 +756,37 @@ const IntervalSet* regionCoverage(const CompileEnv& env, RegionId id) {
     return region == nullptr ? nullptr : &region->coverage;
 }
 
-Color sampleRampData(const RampData* ramp, float t, Color fallback) {
-    if (ramp == nullptr || ramp->desc.stops.empty()) {
+// A ramp with every stop turned into the colour it means under the palette in
+// force. Built once per mark, where the palette is known, so the samplers below
+// never have to look one up per pixel.
+struct ResolvedRamp {
+    std::vector<RampStop> stops;     // role already applied; only color is read
+    bool interpolate = true;
+    bool empty() const { return stops.empty(); }
+};
+
+ResolvedRamp resolveRamp(const CompileEnv& env, RampId id) {
+    ResolvedRamp out;
+    const RampData* ramp = env.impl->findRamp(id);
+    if (ramp == nullptr) {
+        return out;
+    }
+    out.interpolate = ramp->desc.interpolate;
+    out.stops.reserve(ramp->desc.stops.size());
+    for (RampStop stop : ramp->desc.stops) {
+        // The same rule as every fill: a role wins, the literal is what it
+        // falls back to when the role resolves to nothing.
+        stop.color = env.role(stop.role, stop.color);
+        out.stops.push_back(stop);
+    }
+    return out;
+}
+
+Color sampleRampData(const ResolvedRamp& ramp, float t, Color fallback) {
+    if (ramp.empty()) {
         return fallback;
     }
-    const std::vector<RampStop>& stops = ramp->desc.stops;
+    const std::vector<RampStop>& stops = ramp.stops;
     const float clamped = clamp01(t);
     if (clamped <= stops.front().position) {
         return stops.front().color;
@@ -774,7 +800,7 @@ Color sampleRampData(const RampData* ramp, float t, Color fallback) {
         if (clamped < a.position || clamped > b.position) {
             continue;
         }
-        if (!ramp->desc.interpolate) {
+        if (!ramp.interpolate) {
             return a.color;
         }
         const float span = b.position - a.position;
@@ -901,11 +927,11 @@ float modulationValue(DitherModulation modulation, float density,
 // Pick a colour by dithering between the two ramp stops the value falls
 // between. Two stops plus a constant value is classic two-tone dithering; more
 // stops and a modulated value is a dithered gradient, one band per stop pair.
-Color ditherRampColor(const RampData* ramp, float value, float threshold) {
-    if (ramp == nullptr || ramp->desc.stops.empty()) {
+Color ditherRampColor(const ResolvedRamp& ramp, float value, float threshold) {
+    if (ramp.empty()) {
         return value > threshold ? Color::white() : Color::black();
     }
-    const std::vector<RampStop>& stops = ramp->desc.stops;
+    const std::vector<RampStop>& stops = ramp.stops;
     if (stops.size() == 1) {
         return stops.front().color;
     }
@@ -1600,7 +1626,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const RampData* ramp = env.impl->findRamp(fill->ramp);
+        const ResolvedRamp ramp = resolveRamp(env, fill->ramp);
         const PatternData* pattern = env.impl->findPattern(fill->pattern);
         const float density = clamp01(fill->density);
         const float phase = fill->phase;
@@ -1632,7 +1658,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const RampData* ramp = env.impl->findRamp(fill->ramp);
+        const ResolvedRamp ramp = resolveRamp(env, fill->ramp);
         const Vec2f origin = spaceOrigin(env, fill->coordinateSpace, *coverage);
         const Vec2f start { fill->startPoint.x + origin.x, fill->startPoint.y + origin.y };
         const Vec2f end { fill->endPoint.x + origin.x, fill->endPoint.y + origin.y };
@@ -1658,7 +1684,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const RampData* ramp = env.impl->findRamp(fill->ramp);
+        const ResolvedRamp ramp = resolveRamp(env, fill->ramp);
         const Rect2i box = geom::bounds(*coverage);
         const float radians = fill->angle * kPi / 180.f;
         const Vec2f axis { math::cosf(radians), math::sinf(radians) };
@@ -1682,7 +1708,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (coverage == nullptr) {
             return false;
         }
-        const RampData* ramp = env.impl->findRamp(fill->ramp);
+        const ResolvedRamp ramp = resolveRamp(env, fill->ramp);
         const uint32_t seed = static_cast<uint32_t>(fill->seed);
         const float scale = std::max(0.0001f, fill->scale);
 

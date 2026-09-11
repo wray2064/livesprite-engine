@@ -273,11 +273,32 @@ LS_C_API ls_error ls_palette_set_color(ls_context* ctx, ls_id palette, uint32_t 
                                        ls_color color);
 LS_C_API ls_error ls_sprite_bind_palette(ls_context* ctx, ls_id sprite, ls_id palette);
 
+/* Takes a role out. Everything naming it falls back to its literal colour on
+ * the next compile; nothing is rewritten. */
+LS_C_API ls_error ls_palette_remove_color(ls_context* ctx, ls_id palette, uint32_t role);
+
+/* A slot's name for a panel. NULL or "" clears it. The engine never reads it. */
+LS_C_API ls_error ls_palette_set_label(ls_context* ctx, ls_id palette, uint32_t role,
+                                       const char* label);
+
+/* Whether anything in the document names this role -- what to ask before
+ * removing one. */
+LS_C_API ls_error ls_document_uses_palette_role(ls_context* ctx, ls_id document,
+                                                uint32_t role, int* out_used);
+
 /* Ramp stops: positions in [0,1], parallel to colours. */
 LS_C_API ls_error ls_ramp_create(ls_context* ctx, ls_id document, const char* name,
                                  const float* positions, const ls_color* colors,
                                  size_t stop_count, int interpolate,
                                  ls_id* out_ramp);
+
+/* The same, with a role per stop. A stop whose role is LS_ROLE_NONE is the
+ * literal colour; any other resolves through the palette at compile time, so
+ * a dither built from two roles recolours with a palette change. */
+LS_C_API ls_error ls_ramp_create_roles(ls_context* ctx, ls_id document, const char* name,
+                                       const float* positions, const ls_color* colors,
+                                       const uint32_t* roles, size_t stop_count,
+                                       int interpolate, ls_id* out_ramp);
 
 /* One of the built-in threshold matrices. kind mirrors ls::DitherPatternKind. */
 LS_C_API ls_error ls_dither_pattern_create(ls_context* ctx, ls_id document, int32_t kind,

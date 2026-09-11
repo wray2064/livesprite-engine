@@ -53,9 +53,18 @@ struct PaletteDesc {
     std::vector<PaletteColorEntry>  entries;
 };
 
+// One stop of a ramp: where along the ramp it sits, and what colour it is.
+//
+// The colour is a role first and a value second, the same way every fill's
+// colour is. A stop that names a role resolves through the sprite's palette at
+// compile time, so a dither built from two roles recolours with everything
+// else when a slot changes -- from the drawing, not over it. A stop that names
+// no role is the literal colour, which is what ramps were before roles reached
+// them and what a file written then still contains.
 struct RampStop {
-    float   position = 0.f;    // [0..1]
-    Color   color;
+    float     position = 0.f;    // [0..1]
+    Color     color;             // the literal, and the fallback when the role resolves to nothing
+    ColorRole role = kColorRoleNone;
 };
 
 struct RampDesc {
@@ -561,6 +570,23 @@ public:
     Result<PaletteId>   createPalette(DocumentId doc, const PaletteDesc& desc);
     VoidResult          deletePalette(PaletteId id);
     VoidResult          setPaletteColor(PaletteId palette, ColorRole role, Color color);
+
+    // Takes a role out of the palette. Nothing that referenced it is touched:
+    // every fill, stroke, outline and ramp stop naming it falls back to its own
+    // literal colour on the next compile, which is what the fallback is for.
+    // An editor deciding whether to warn first can ask usesPaletteRole below.
+    VoidResult          removePaletteColor(PaletteId palette, ColorRole role);
+
+    // A slot's name in a panel -- "skin", "outline", "shadow 2". The engine
+    // stores it and never reads it. It is in PaletteColorEntry on the way out;
+    // this is the way to change one after the palette exists.
+    VoidResult          setPaletteLabel(PaletteId palette, ColorRole role, std::string_view label);
+
+    // Whether anything in the document names this role: an operation's
+    // paletteRole, a region's standing role, or a ramp stop. What a panel asks
+    // before removing a slot, so it can say "used by three layers" instead of
+    // silently reverting them.
+    Result<bool>        usesPaletteRole(DocumentId doc, ColorRole role) const;
     VoidResult          bindDocumentPalette(DocumentId doc, PaletteId palette);
     VoidResult          bindSpritePalette(SpriteId sprite, PaletteId palette);
     Result<PaletteId>   getEffectivePalette(SpriteId sprite) const;
@@ -570,8 +596,17 @@ public:
     VoidResult          deleteRamp(RampId id);
     VoidResult          updateRamp(RampId id, const RampDesc& desc);
     Result<Color>       sampleRamp(RampId ramp, float t) const;
+    // What the ramp currently holds. An interface showing a ramp's stops has
+    // to read them from somewhere, and the only somewhere is here -- keeping
+    // its own copy is the parallel-list mistake in miniature.
+    Result<RampDesc>    getRamp(RampId ramp) const;
 
     VoidResult          swapPalette(SpriteId sprite, PaletteId newPalette);
+    // Rewrites a ramp's literal stops for a palette change by matching each
+    // colour to the role it appears to be. This is a guess -- exact match, then
+    // nearest -- and it exists for ramps built from literal colours. A ramp
+    // whose stops name roles needs none of it: it follows the palette on its
+    // own, and is left untouched here.
     VoidResult          remapRamp(RampId ramp, PaletteId fromPalette, PaletteId toPalette);
 
     // Give a region a standing colour role: a fill targeting it that names no

@@ -613,6 +613,56 @@ ls_error ls_palette_set_color(ls_context* ctx, ls_id palette, uint32_t role, ls_
     return toError(engine.setPaletteColor(asId<PaletteId>(palette), role, toColor(color)).error);
 }
 
+ls_error ls_palette_remove_color(ls_context* ctx, ls_id palette, uint32_t role) {
+    LS_C_CONTEXT(ctx);
+    return toError(engine.removePaletteColor(asId<PaletteId>(palette), role).error);
+}
+
+ls_error ls_palette_set_label(ls_context* ctx, ls_id palette, uint32_t role,
+                              const char* label) {
+    LS_C_CONTEXT(ctx);
+    return guarded([&] {
+        return toError(engine.setPaletteLabel(asId<PaletteId>(palette), role,
+                                              label != nullptr ? label : "").error);
+    });
+}
+
+ls_error ls_document_uses_palette_role(ls_context* ctx, ls_id document,
+                                       uint32_t role, int* out_used) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_used != nullptr);
+    auto used = engine.usesPaletteRole(asId<DocumentId>(document), role);
+    if (used.fail()) {
+        return toError(used.error);
+    }
+    *out_used = used.value ? 1 : 0;
+    return LS_OK;
+}
+
+ls_error ls_ramp_create_roles(ls_context* ctx, ls_id document, const char* name,
+                              const float* positions, const ls_color* colors,
+                              const uint32_t* roles, size_t stop_count,
+                              int interpolate, ls_id* out_ramp) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_ramp != nullptr);
+    LS_C_REQUIRE((positions != nullptr && colors != nullptr && roles != nullptr) ||
+                 stop_count == 0);
+    return guarded([&] {
+        RampDesc desc;
+        desc.name = name != nullptr ? name : "";
+        desc.interpolate = interpolate != 0;
+        desc.stops.reserve(stop_count);
+        for (size_t i = 0; i < stop_count; ++i) {
+            RampStop stop;
+            stop.position = positions[i];
+            stop.color = toColor(colors[i]);
+            stop.role = roles[i];
+            desc.stops.push_back(stop);
+        }
+        return outId(engine.createRamp(asId<DocumentId>(document), desc), out_ramp);
+    });
+}
+
 ls_error ls_sprite_bind_palette(ls_context* ctx, ls_id sprite, ls_id palette) {
     LS_C_CONTEXT(ctx);
     return toError(engine.bindSpritePalette(asId<SpriteId>(sprite),
