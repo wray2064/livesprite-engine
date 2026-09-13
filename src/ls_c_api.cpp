@@ -700,6 +700,88 @@ ls_error ls_sprite_bind_palette(ls_context* ctx, ls_id sprite, ls_id palette) {
                                             asId<PaletteId>(palette)).error);
 }
 
+ls_error ls_sprite_palette(ls_context* ctx, ls_id sprite, ls_id* out_palette) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_palette != nullptr);
+    return guarded([&] {
+        auto bound = engine.getSpritePalette(asId<SpriteId>(sprite));
+        if (bound.fail()) {
+            return toError(bound.error);
+        }
+        *out_palette = bound.value.value;
+        return static_cast<int32_t>(LS_OK);
+    });
+}
+
+ls_error ls_document_palette_count(ls_context* ctx, ls_id document, size_t* out_count) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_count != nullptr);
+    return guarded([&] {
+        auto info = engine.getDocumentInfo(asId<DocumentId>(document));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        *out_count = info.value.palettes.size();
+        return static_cast<int32_t>(LS_OK);
+    });
+}
+
+ls_error ls_document_palette_at(ls_context* ctx, ls_id document, size_t index,
+                                ls_id* out_palette) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_palette != nullptr);
+    return guarded([&] {
+        auto info = engine.getDocumentInfo(asId<DocumentId>(document));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        if (index >= info.value.palettes.size()) {
+            return static_cast<int32_t>(LS_ERROR_OUT_OF_BOUNDS);
+        }
+        *out_palette = info.value.palettes[index].value;
+        return static_cast<int32_t>(LS_OK);
+    });
+}
+
+ls_error ls_document_palette(ls_context* ctx, ls_id document, ls_id* out_palette) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_palette != nullptr);
+    return guarded([&] {
+        auto info = engine.getDocumentInfo(asId<DocumentId>(document));
+        if (info.fail()) {
+            return toError(info.error);
+        }
+        *out_palette = info.value.palette.value;
+        return static_cast<int32_t>(LS_OK);
+    });
+}
+
+ls_error ls_document_bind_palette(ls_context* ctx, ls_id document, ls_id palette) {
+    LS_C_CONTEXT(ctx);
+    return toError(engine.bindDocumentPalette(asId<DocumentId>(document),
+                                              asId<PaletteId>(palette)).error);
+}
+
+ls_error ls_palette_name(ls_context* ctx, ls_id palette,
+                         char* buffer, size_t buffer_size, size_t* out_needed) {
+    LS_C_CONTEXT(ctx);
+    return guarded([&] {
+        auto name = engine.getPaletteName(asId<PaletteId>(palette));
+        if (name.fail()) {
+            return toError(name.error);
+        }
+        return copyOut(name.value, buffer, buffer_size, out_needed);
+    });
+}
+
+ls_error ls_palette_set_name(ls_context* ctx, ls_id palette, const char* name) {
+    LS_C_CONTEXT(ctx);
+    return guarded([&] {
+        return toError(engine.setPaletteName(asId<PaletteId>(palette),
+                                             name != nullptr ? name : "").error);
+    });
+}
+
 ls_error ls_ramp_create(ls_context* ctx, ls_id document, const char* name,
                         const float* positions, const ls_color* colors,
                         size_t stop_count, int interpolate, ls_id* out_ramp) {

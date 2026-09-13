@@ -351,8 +351,72 @@ void testAPaletteWriteDirtiesEverySpriteThatUsesIt() {
     LS_CHECK(dirty.ok() && !dirty.value);
 }
 
+// Several palettes in one document: the document names one, a sprite may name
+// another, and a sprite that drops its own follows the document's again. This
+// is what a swap is made of, and what per-frame binding is made of.
+void testADocumentHoldsSeveralPalettesAndASpriteMayPickOne() {
+    Scene s;
+    LS_REQUIRE(s.build());
+    LS_REQUIRE(s.ditherWith(true));
+
+    PaletteDesc night;
+    night.name = "night";
+    night.entries = { { kDark, kDarkB, "dark" }, { kLight, kLightB, "light" } };
+    auto made = s.engine->createPalette(s.doc, night);
+    LS_REQUIRE(made.ok());
+
+    auto info = s.engine->getDocumentInfo(s.doc);
+    LS_REQUIRE(info.ok());
+    LS_CHECK(info.value.palettes.size() == 2);
+    LS_CHECK(info.value.palettes[0] == s.palette && info.value.palettes[1] == made.value);
+
+    auto name = s.engine->getPaletteName(made.value);
+    LS_CHECK(name.ok() && name.value == "night");
+    LS_CHECK(s.engine->setPaletteName(made.value, "dusk").ok());
+    name = s.engine->getPaletteName(made.value);
+    LS_CHECK(name.ok() && name.value == "dusk");
+
+    // The sprite was bound to "day" by name. Dropping that makes it follow
+    // the document's, which is nothing yet -- then day, then night.
+    LS_CHECK(s.engine->bindSpritePalette(s.sprite, PaletteId::null()).ok());
+    auto own = s.engine->getSpritePalette(s.sprite);
+    LS_CHECK(own.ok() && !own.value.valid());
+    LS_REQUIRE(s.engine->bindDocumentPalette(s.doc, s.palette).ok());
+    auto effective = s.engine->getEffectivePalette(s.sprite);
+    LS_CHECK(effective.ok() && effective.value == s.palette);
+    LS_CHECK(has(s.render(), kDarkA));
+
+    LS_REQUIRE(s.engine->bindDocumentPalette(s.doc, made.value).ok());
+    LS_CHECK(has(s.render(), kDarkB));
+    LS_CHECK(!has(s.render(), kDarkA));
+
+    // A sprite with its own binding ignores the document's switch, and a
+    // write to the palette it left no longer reaches it.
+    LS_REQUIRE(s.engine->bindSpritePalette(s.sprite, s.palette).ok());
+    LS_CHECK(has(s.render(), kDarkA));
+    s.engine->compileSprite(s.sprite, CompileProfile{});
+    s.engine->setPaletteColor(made.value, kDark, Color{ 1, 1, 1, 255 });
+    auto dirty = s.engine->isDirty(s.sprite.value);
+    LS_CHECK(dirty.ok() && !dirty.value);
+
+    // Names and bindings survive a save.
+    auto bytes = s.engine->serializeDocument(s.doc);
+    LS_REQUIRE(bytes.ok());
+    auto again = LSContext::create();
+    auto loaded = again->deserializeDocument(bytes.value);
+    LS_REQUIRE(loaded.ok());
+    auto info2 = again->getDocumentInfo(loaded.value);
+    LS_REQUIRE(info2.ok() && info2.value.palettes.size() == 2);
+    auto name2 = again->getPaletteName(info2.value.palettes[1]);
+    LS_CHECK(name2.ok() && name2.value == "dusk");
+    LS_CHECK(info2.value.palette == info2.value.palettes[1]);
+    auto own2 = again->getSpritePalette(info2.value.sprites.front());
+    LS_CHECK(own2.ok() && own2.value == info2.value.palettes[0]);
+}
+
 int main() {
     testADitherFromRolesFollowsThePalette();
+    testADocumentHoldsSeveralPalettesAndASpriteMayPickOne();
     testAPaletteWriteDirtiesEverySpriteThatUsesIt();
     testADitherFromLiteralsIgnoresThePalette();
     testARemovedSlotFallsBackToTheLiteral();

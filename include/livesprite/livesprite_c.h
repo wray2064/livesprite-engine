@@ -275,7 +275,24 @@ LS_C_API ls_error ls_palette_create(ls_context* ctx, ls_id document, const char*
                                     size_t entry_count, ls_id* out_palette);
 LS_C_API ls_error ls_palette_set_color(ls_context* ctx, ls_id palette, uint32_t role,
                                        ls_color color);
+/* A palette of 0 removes the sprite's own binding, so it follows the
+ * document's palette again. */
 LS_C_API ls_error ls_sprite_bind_palette(ls_context* ctx, ls_id sprite, ls_id palette);
+/* The sprite's own binding, or 0 when it follows the document's. */
+LS_C_API ls_error ls_sprite_palette(ls_context* ctx, ls_id sprite, ls_id* out_palette);
+
+/* Every palette the document holds, in creation order, and which one the
+ * document is bound to (0 when none). */
+LS_C_API ls_error ls_document_palette_count(ls_context* ctx, ls_id document,
+                                            size_t* out_count);
+LS_C_API ls_error ls_document_palette_at(ls_context* ctx, ls_id document, size_t index,
+                                         ls_id* out_palette);
+LS_C_API ls_error ls_document_palette(ls_context* ctx, ls_id document, ls_id* out_palette);
+LS_C_API ls_error ls_document_bind_palette(ls_context* ctx, ls_id document, ls_id palette);
+
+LS_C_API ls_error ls_palette_name(ls_context* ctx, ls_id palette,
+                                  char* buffer, size_t buffer_size, size_t* out_needed);
+LS_C_API ls_error ls_palette_set_name(ls_context* ctx, ls_id palette, const char* name);
 
 /* Takes a role out. Everything naming it falls back to its literal colour on
  * the next compile; nothing is rewritten. */

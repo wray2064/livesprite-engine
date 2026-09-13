@@ -556,6 +556,33 @@ static void test_palette_roles(void) {
     CHECK(saw_day == 128);
     ls_raster_release(raster);
 
+    /* Several palettes, named, listed, and bound at either level. */
+    {
+        ls_id second = 0, found = 0;
+        size_t count = 0, needed = 0;
+        char name[16];
+        colors[0].r = 60;  colors[0].g = 20; colors[0].b = 20; colors[0].a = 255;
+        colors[1].r = 200; colors[1].g = 90; colors[1].b = 90; colors[1].a = 255;
+        CHECK_OK(ls_palette_create(ctx, doc, "second", roles, colors, 2, &second));
+        CHECK_OK(ls_document_palette_count(ctx, doc, &count));
+        CHECK(count == 2);
+        CHECK_OK(ls_document_palette_at(ctx, doc, 1, &found));
+        CHECK(found == second);
+        CHECK(ls_document_palette_at(ctx, doc, 2, &found) == LS_ERROR_OUT_OF_BOUNDS);
+        CHECK_OK(ls_palette_name(ctx, second, name, sizeof(name), &needed));
+        CHECK(strcmp(name, "second") == 0);
+        CHECK_OK(ls_palette_set_name(ctx, second, "dusk"));
+        CHECK_OK(ls_palette_name(ctx, second, name, sizeof(name), &needed));
+        CHECK(strcmp(name, "dusk") == 0);
+
+        CHECK_OK(ls_sprite_bind_palette(ctx, sprite, 0));       /* follow the document */
+        CHECK_OK(ls_sprite_palette(ctx, sprite, &found));
+        CHECK(found == 0);
+        CHECK_OK(ls_document_bind_palette(ctx, doc, second));
+        CHECK_OK(ls_document_palette(ctx, doc, &found));
+        CHECK(found == second);
+    }
+
     ls_context_destroy(ctx);
 }
 

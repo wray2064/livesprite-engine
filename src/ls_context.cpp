@@ -820,6 +820,7 @@ Result<DocumentInfo> LSContext::getDocumentInfo(DocumentId doc) const {
     info.canvasHeight = data->canvasHeight;
     info.palette = data->palette;
     info.sprites = data->sprites;
+    info.palettes = data->palettes;
     return Result<DocumentInfo>::ok(std::move(info));
 }
 
@@ -2503,13 +2504,44 @@ VoidResult LSContext::bindDocumentPalette(DocumentId doc, PaletteId palette) {
 
 VoidResult LSContext::bindSpritePalette(SpriteId sprite, PaletteId palette) {
     SpriteData* data = impl_->findSprite(sprite);
-    if (data == nullptr || impl_->findPalette(palette) == nullptr) {
+    if (data == nullptr || (palette.valid() && impl_->findPalette(palette) == nullptr)) {
         return VoidResult::err(LSError::InvalidId);
+    }
+    if (data->palette.valid()) {
+        impl_->removeDependencyEdge(data->palette.value, sprite.value);
     }
     data->palette = palette;
     ++impl_->resourceRevision;
-    impl_->addDependencyEdge(palette.value, sprite.value);
+    if (palette.valid()) {
+        impl_->addDependencyEdge(palette.value, sprite.value);
+    }
     impl_->markDirtyInternal(sprite.value);
+    return VoidResult::success();
+}
+
+Result<PaletteId> LSContext::getSpritePalette(SpriteId sprite) const {
+    const SpriteData* data = impl_->findSprite(sprite);
+    if (data == nullptr) {
+        return Result<PaletteId>::err(LSError::InvalidId);
+    }
+    return Result<PaletteId>::ok(data->palette);
+}
+
+Result<std::string> LSContext::getPaletteName(PaletteId palette) const {
+    const PaletteData* data = impl_->findPalette(palette);
+    if (data == nullptr) {
+        return Result<std::string>::err(LSError::InvalidId);
+    }
+    return Result<std::string>::ok(data->name);
+}
+
+VoidResult LSContext::setPaletteName(PaletteId palette, std::string_view name) {
+    PaletteData* data = impl_->findPalette(palette);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->name = std::string(name);
+    ++impl_->resourceRevision;
     return VoidResult::success();
 }
 

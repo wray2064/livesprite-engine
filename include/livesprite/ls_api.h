@@ -201,6 +201,7 @@ struct DocumentInfo {
     uint32_t                canvasHeight = 0;
     PaletteId               palette;        // null = no document palette bound
     std::vector<SpriteId>   sprites;
+    std::vector<PaletteId>  palettes;       // every palette the document holds
 };
 
 struct SpriteInfo {
@@ -587,8 +588,18 @@ public:
     // before removing a slot, so it can say "used by three layers" instead of
     // silently reverting them.
     Result<bool>        usesPaletteRole(DocumentId doc, ColorRole role) const;
+    // The name a palette was made with, and a way to change it. Names reach
+    // a panel and the save file, never the pixels.
+    Result<std::string> getPaletteName(PaletteId palette) const;
+    VoidResult          setPaletteName(PaletteId palette, std::string_view name);
+
     VoidResult          bindDocumentPalette(DocumentId doc, PaletteId palette);
+    // A sprite bound to a palette uses it instead of the document's. Binding
+    // to a null id removes the sprite's own binding, so it follows the
+    // document's palette again -- which is what "use the document's" means
+    // when a frame that had its own is switched back.
     VoidResult          bindSpritePalette(SpriteId sprite, PaletteId palette);
+    Result<PaletteId>   getSpritePalette(SpriteId sprite) const;   // the sprite's own, or null
     Result<PaletteId>   getEffectivePalette(SpriteId sprite) const;
     Result<std::vector<PaletteColorEntry>> getPaletteEntries(PaletteId palette) const;
 
