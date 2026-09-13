@@ -1056,6 +1056,102 @@ VoidResult LSContext::setSpriteOrder(DocumentId doc, const std::vector<SpriteId>
     return VoidResult::success();
 }
 
+// What a layer clone carries between layers of one sprite clone: the copies
+// already made, so a region two layers share stays one region, and the
+// sprite-level tables when the whole sprite is being copied.
+struct LSContext::LayerCloneTables {
+    std::map<uint64_t, uint64_t> geometry;
+    std::map<uint64_t, uint64_t> regions;
+    const std::map<uint64_t, uint64_t>* pivots     = nullptr;
+    const std::map<uint64_t, uint64_t>* sockets    = nullptr;
+    const std::map<uint64_t, uint64_t>* boundaries = nullptr;
+    uint64_t sourceSprite = 0;
+    uint64_t cloneSprite  = 0;
+};
+
+Result<LayerId> LSContext::cloneLayerInto(LayerId source, SpriteId into, int32_t atIndex,
+                                          LayerCloneTables& tables) {
+    const LayerData* layerData = impl_->findLayer(source);
+    if (layerData == nullptr) {
+        return Result<LayerId>::err(LSError::InvalidId);
+    }
+    const LayerData layerCopy = *layerData;
+    auto clonedLayer = createLayer(into, layerCopy.desc);
+    if (clonedLayer.fail()) {
+        return clonedLayer;
+    }
+    if (LayerData* target = impl_->findLayer(clonedLayer.value)) {
+        target->mask = layerCopy.mask;
+    }
+    for (OperationId op : layerCopy.operations) {
+        const OperationData* opData = impl_->findOperation(op);
+        if (opData == nullptr) {
+            continue;
+        }
+        Operation copy = opData->op;
+
+        // Make the copies first, then point the operation at them. Doing it
+        // in one pass would mean rewriting a handle to something not built
+        // yet.
+        std::vector<GeometryId> heldGeometry;
+        std::vector<RegionId>   heldRegions;
+        CollectHandles collector{ &heldGeometry, &heldRegions };
+        reflect::visitOperation(collector, copy);
+
+        for (RegionId held : heldRegions) {
+            cloneRegion(*impl_, held, tables.geometry, tables.regions);
+        }
+        for (GeometryId held : heldGeometry) {
+            cloneGeometry(*impl_, held, tables.geometry);
+        }
+
+        CloneRemap remap;
+        remap.geometry = &tables.geometry;
+        remap.regions = &tables.regions;
+        remap.pivots = tables.pivots;
+        remap.sockets = tables.sockets;
+        remap.boundaries = tables.boundaries;
+        remap.sourceSprite = tables.sourceSprite;
+        remap.cloneSprite = tables.cloneSprite;
+        reflect::visitOperation(remap, copy);
+
+        addOperation(clonedLayer.value, copy);
+    }
+
+    // Into place. createLayer appends; a copy usually wants to sit right
+    // above what it copied.
+    if (atIndex >= 0) {
+        if (SpriteData* sprite = impl_->findSprite(into)) {
+            auto& order = sprite->layers;
+            order.pop_back();
+            const size_t at = std::min(static_cast<size_t>(atIndex), order.size());
+            order.insert(order.begin() + static_cast<ptrdiff_t>(at), clonedLayer.value);
+            impl_->markDirtyInternal(into.value);
+        }
+    }
+    return clonedLayer;
+}
+
+Result<LayerId> LSContext::cloneLayer(LayerId source, SpriteId into, int32_t atIndex) {
+    const LayerData* layerData = impl_->findLayer(source);
+    const SpriteData* target = impl_->findSprite(into);
+    if (layerData == nullptr || target == nullptr) {
+        return Result<LayerId>::err(LSError::InvalidId);
+    }
+    const SpriteData* from = impl_->findSprite(layerData->sprite);
+    if (from == nullptr || from->document != target->document) {
+        return Result<LayerId>::err(LSError::InvalidParameter);
+    }
+    // No pivot, socket or boundary tables: those belong to the sprite, and a
+    // layer copied into another sprite keeps pointing at the ones it knew --
+    // which is what a caller moving a layer between frames of one figure
+    // wants, since the frames were cloned from each other and share none.
+    LayerCloneTables tables;
+    tables.sourceSprite = layerData->sprite.value;
+    tables.cloneSprite = into.value;
+    return cloneLayerInto(source, into, atIndex, tables);
+}
+
 Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
     const SpriteData* source = impl_->findSprite(src);
     if (source == nullptr) {
@@ -1110,56 +1206,16 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
     // Everything the clone is given a copy of, keyed by what it was copied
     // from. Built as the operations are walked, and shared across layers, so a
     // region two layers both fill stays one region in the copy.
-    std::map<uint64_t, uint64_t> geometryRemap = geometryRemapEarly;
-    std::map<uint64_t, uint64_t> regionRemap;
+    LayerCloneTables tables;
+    tables.geometry = geometryRemapEarly;
+    tables.pivots = &pivotRemap;
+    tables.sockets = &socketRemap;
+    tables.boundaries = &boundaryRemap;
+    tables.sourceSprite = src.value;
+    tables.cloneSprite = cloneId.value;
 
     for (LayerId layer : sourceCopy.layers) {
-        const LayerData* layerData = impl_->findLayer(layer);
-        if (layerData == nullptr) {
-            continue;
-        }
-        const LayerData layerCopy = *layerData;
-        auto clonedLayer = createLayer(cloneId, layerCopy.desc);
-        if (clonedLayer.fail()) {
-            continue;
-        }
-        if (LayerData* target = impl_->findLayer(clonedLayer.value)) {
-            target->mask = layerCopy.mask;
-        }
-        for (OperationId op : layerCopy.operations) {
-            const OperationData* opData = impl_->findOperation(op);
-            if (opData == nullptr) {
-                continue;
-            }
-            Operation copy = opData->op;
-
-            // Make the copies first, then point the operation at them. Doing it
-            // in one pass would mean rewriting a handle to something not built
-            // yet.
-            std::vector<GeometryId> heldGeometry;
-            std::vector<RegionId>   heldRegions;
-            CollectHandles collector{ &heldGeometry, &heldRegions };
-            reflect::visitOperation(collector, copy);
-
-            for (RegionId held : heldRegions) {
-                cloneRegion(*impl_, held, geometryRemap, regionRemap);
-            }
-            for (GeometryId held : heldGeometry) {
-                cloneGeometry(*impl_, held, geometryRemap);
-            }
-
-            CloneRemap remap;
-            remap.geometry = &geometryRemap;
-            remap.regions = &regionRemap;
-            remap.pivots = &pivotRemap;
-            remap.sockets = &socketRemap;
-            remap.boundaries = &boundaryRemap;
-            remap.sourceSprite = src.value;
-            remap.cloneSprite = cloneId.value;
-            reflect::visitOperation(remap, copy);
-
-            addOperation(clonedLayer.value, copy);
-        }
+        cloneLayerInto(layer, cloneId, -1, tables);
     }
 
     if (SpriteData* clone = impl_->findSprite(cloneId)) {

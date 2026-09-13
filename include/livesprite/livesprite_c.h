@@ -192,6 +192,10 @@ LS_C_API ls_error ls_sprite_destroy(ls_context* ctx, ls_id sprite);
  * shape in the copy does not move it in the original, which is what makes this
  * the call an animation frame is made with. */
 LS_C_API ls_error ls_sprite_clone(ls_context* ctx, ls_id sprite, ls_id* out_clone);
+/* A copy of a layer, into the same or another sprite of the document. at_index
+ * places it in that sprite's order; -1 puts it on top. */
+LS_C_API ls_error ls_layer_clone(ls_context* ctx, ls_id layer, ls_id into_sprite,
+                                 int32_t at_index, ls_id* out_layer);
 
 /* Reorders the sprites of a document. `ordered` must be a permutation of what
  * the document already holds -- count and all -- or nothing is changed. The

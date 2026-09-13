@@ -347,6 +347,16 @@ ls_error ls_sprite_create(ls_context* ctx, ls_id document, ls_id* out_sprite) {
     });
 }
 
+ls_error ls_layer_clone(ls_context* ctx, ls_id layer, ls_id into_sprite,
+                        int32_t at_index, ls_id* out_layer) {
+    LS_C_CONTEXT(ctx);
+    LS_C_REQUIRE(out_layer != nullptr);
+    return guarded([&] {
+        return outId(engine.cloneLayer(asId<LayerId>(layer), asId<SpriteId>(into_sprite),
+                                       at_index), out_layer);
+    });
+}
+
 ls_error ls_sprite_destroy(ls_context* ctx, ls_id sprite) {
     LS_C_CONTEXT(ctx);
     return toError(engine.deleteSprite(asId<SpriteId>(sprite)).error);

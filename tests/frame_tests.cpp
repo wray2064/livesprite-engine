@@ -116,6 +116,56 @@ void testACloneIsItsOwnFrame() {
     LS_CHECK(!sameBytes(before, f.render(clone.value)));       // and the copy moved
 }
 
+// A layer copied on its own: same picture, its own drawing, placed where it
+// was asked for, and at home in another frame of the same document.
+void testAClonedLayerIsItsOwn() {
+    Fixture f;
+    LS_REQUIRE(f.build());
+    const RasterBuffer before = f.render(f.sprite);
+
+    // Right above the original: index 1 of what becomes two.
+    auto copy = f.engine->cloneLayer(f.layer, f.sprite, 1);
+    LS_REQUIRE(copy.ok());
+    auto info = f.engine->getSpriteInfo(f.sprite);
+    LS_REQUIRE(info.ok() && info.value.layers.size() == 2);
+    LS_CHECK(info.value.layers[0] == f.layer && info.value.layers[1] == copy.value);
+    LS_CHECK(sameBytes(before, f.render(f.sprite)));      // covers the same pixels exactly
+
+    // Its own region and geometry.
+    auto operations = f.engine->getLayerOperations(copy.value);
+    LS_REQUIRE(operations.ok() && operations.value.size() == 1);
+    auto target = f.engine->getOperationParameter(operations.value.front().id, "targetRegion");
+    LS_REQUIRE(target.ok());
+    const RegionId copiedRegion{ std::get<uint64_t>(target.value) };
+    LS_CHECK(copiedRegion != f.region);
+    auto geometryOf = f.engine->getRegionSourceGeometry(copiedRegion);
+    LS_REQUIRE(geometryOf.ok());
+    LS_REQUIRE(f.engine->updateRect(geometryOf.value, { { 8.f, 8.f }, 6.f, 6.f, 0.f }).ok());
+    LS_CHECK(!sameBytes(before, f.render(f.sprite)));
+    LS_REQUIRE(f.engine->setLayerVisibility(copy.value, false).ok());
+    LS_CHECK(sameBytes(before, f.render(f.sprite)));      // the original is untouched
+
+    // Into another frame, at the bottom of its stack.
+    auto other = f.engine->createSprite(f.doc);
+    LS_REQUIRE(other.ok());
+    auto moved = f.engine->cloneLayer(f.layer, other.value, 0);
+    LS_REQUIRE(moved.ok());
+    LS_CHECK(sameBytes(before, f.render(other.value)));
+    auto ownerOf = f.engine->getLayerInfo(moved.value);
+    LS_CHECK(ownerOf.ok() && ownerOf.value.sprite == other.value);
+
+    // -1 is the top, and a layer of another document is refused.
+    auto top = f.engine->cloneLayer(f.layer, f.sprite, -1);
+    LS_REQUIRE(top.ok());
+    info = f.engine->getSpriteInfo(f.sprite);
+    LS_CHECK(info.ok() && info.value.layers.back() == top.value);
+    auto elsewhere = f.engine->createDocument({ "other", 16, 16 });
+    LS_REQUIRE(elsewhere.ok());
+    auto foreign = f.engine->createSprite(elsewhere.value);
+    LS_REQUIRE(foreign.ok());
+    LS_CHECK(f.engine->cloneLayer(f.layer, foreign.value).fail());
+}
+
 // The other half: deleting a frame must not take the frames beside it with it.
 void testDeletingAFrameLeavesTheOthersDrawable() {
     Fixture f;
@@ -413,6 +463,7 @@ void testExportOriginMovesAPatternLattice() {
 
 int main() {
     testACloneIsItsOwnFrame();
+    testAClonedLayerIsItsOwn();
     testDeletingAFrameLeavesTheOthersDrawable();
     testAClonedStrokeHasItsOwnPath();
     testFramesSurviveARoundTrip();

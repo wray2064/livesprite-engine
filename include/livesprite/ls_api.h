@@ -457,6 +457,13 @@ public:
 
     Result<LayerId>     createLayer(SpriteId sprite, const LayerDesc& desc);
     VoidResult          deleteLayer(LayerId id);
+    // A copy of a layer -- its description, mask and every operation, with the
+    // geometry and regions those operations own copied too, so the copy draws
+    // the same picture and can then be edited apart from the original. `into`
+    // may be another sprite of the same document, which is how a layer moves
+    // between frames; `atIndex` places it in that sprite's order, -1 for the
+    // top. The copy joins no group and clips to nothing.
+    Result<LayerId>     cloneLayer(LayerId source, SpriteId into, int32_t atIndex = -1);
 
     Result<GroupId>     createGroup(SpriteId sprite, std::string_view name);
     Result<GroupId>     createGroup(SpriteId sprite, const GroupDesc& desc);
@@ -911,6 +918,9 @@ private:
     // cannot know that. compileSprite works it out once and passes it down.
     // Null means the layer is being compiled alone, and such an outline falls
     // back to tracing its own layer rather than disappearing.
+    struct LayerCloneTables;
+    Result<LayerId> cloneLayerInto(LayerId source, SpriteId into, int32_t atIndex,
+                                   LayerCloneTables& tables);
     Result<CompileResult> compileLayerWithin(LayerId id, const CompileProfile& profile,
                                              const RasterBuffer* spriteSilhouette,
                                              bool suppressSpriteOutlines) const;
