@@ -1384,6 +1384,15 @@ VoidResult LSContext::setGroupBlendMode(GroupId id, BlendMode mode) {
     return VoidResult::success();
 }
 
+VoidResult LSContext::setGroupName(GroupId id, std::string_view name) {
+    GroupData* data = impl_->findGroup(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->desc.name = std::string(name);     // a panel's concern, not a pixel's
+    return VoidResult::success();
+}
+
 VoidResult LSContext::setGroupVisibility(GroupId id, bool visible) {
     GroupData* data = impl_->findGroup(id);
     if (data == nullptr) {
@@ -1424,6 +1433,9 @@ VoidResult LSContext::deleteGroup(GroupId id) {
                              sprite->groups.end());
     }
     impl_->groups.erase(id.value);
+    // The layers it held composite on their own now, at their own opacity
+    // and blend, which is a different picture from the group's.
+    impl_->markDirtyInternal(group->sprite.value);
     return VoidResult::success();
 }
 
@@ -1473,6 +1485,7 @@ Result<SpriteInfo> LSContext::getSpriteInfo(SpriteId id) const {
     info.sockets = data->sockets;
     info.boundaries = data->boundaries;
     info.layers = data->layers;
+    info.groups = data->groups;
     info.boundPalette = data->palette;
     return Result<SpriteInfo>::ok(info);
 }

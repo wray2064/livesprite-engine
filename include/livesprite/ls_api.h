@@ -210,6 +210,7 @@ struct SpriteInfo {
     std::vector<SocketId>   sockets;
     std::vector<BoundaryId> boundaries;
     std::vector<LayerId>    layers;         // in compositing order
+    std::vector<GroupId>    groups;         // every group of the sprite
     PaletteId               boundPalette;   // null = use document palette
 };
 
@@ -471,6 +472,7 @@ public:
     VoidResult          setGroupOpacity(GroupId id, float opacity);
     VoidResult          setGroupBlendMode(GroupId id, BlendMode mode);
     VoidResult          setGroupVisibility(GroupId id, bool visible);
+    VoidResult          setGroupName(GroupId id, std::string_view name);
     Result<GroupInfo>   getGroupInfo(GroupId id) const;
     VoidResult          addLayerToGroup(GroupId group, LayerId layer);
     VoidResult          removeLayerFromGroup(GroupId group, LayerId layer);
