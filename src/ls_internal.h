@@ -320,6 +320,14 @@ struct LSContext::Impl {
     void clearDependenciesOf(uint64_t dependent);
     void registerOperationDependencies(OperationId id);
     void markDirtyInternal(uint64_t entityId);
+
+    // A palette write dirties every sprite that resolves through the palette,
+    // not only the ones bound to it by name. A sprite with no binding of its
+    // own inherits the document's, and there is no dependency edge for that:
+    // the edge is added by bindSpritePalette, and a sprite created or cloned
+    // afterwards never goes through it. Walking the document's sprites and
+    // asking each which palette it would actually use is the honest answer.
+    void markPaletteDirty(PaletteId palette);
     void invalidateCacheFor(uint64_t entityId);
 
     // --- boundaries -------------------------------------------------------

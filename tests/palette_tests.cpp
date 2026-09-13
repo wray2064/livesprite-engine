@@ -297,8 +297,63 @@ void testRemapLeavesRoleStopsAlone() {
 
 } // namespace
 
+// A palette write dirties every sprite that resolves through it -- the one
+// bound by name, one cloned from it, and one that was never bound and inherits
+// the document's palette. An editor that compiles only what the engine calls
+// dirty was showing stale frames for the last two.
+void testAPaletteWriteDirtiesEverySpriteThatUsesIt() {
+    Scene s;
+    LS_REQUIRE(s.build());
+    LS_REQUIRE(s.ditherWith(true));
+    LS_REQUIRE(s.engine->bindDocumentPalette(s.doc, s.palette).ok());
+
+    auto cloned = s.engine->cloneSprite(s.sprite);
+    LS_REQUIRE(cloned.ok());
+    auto later = s.engine->createSprite(s.doc);        // inherits the document's
+    LS_REQUIRE(later.ok());
+
+    const SpriteId all[] = { s.sprite, cloned.value, later.value };
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = kSize;
+    profile.outputHeight = kSize;
+    for (SpriteId sprite : all) {
+        s.engine->compileSprite(sprite, profile);
+        auto dirty = s.engine->isDirty(sprite.value);
+        LS_CHECK(dirty.ok() && !dirty.value);
+    }
+
+    s.engine->setPaletteColor(s.palette, kDark, kDarkB);
+    for (SpriteId sprite : all) {
+        auto dirty = s.engine->isDirty(sprite.value);
+        LS_CHECK(dirty.ok() && dirty.value);
+    }
+
+    for (SpriteId sprite : all) { s.engine->compileSprite(sprite, profile); }
+    LS_CHECK(s.engine->removePaletteColor(s.palette, kLight).ok());
+    for (SpriteId sprite : all) {
+        auto dirty = s.engine->isDirty(sprite.value);
+        LS_CHECK(dirty.ok() && dirty.value);
+    }
+
+    // A sprite bound to a different palette is left alone.
+    PaletteDesc other;
+    other.name = "other";
+    other.entries = { { kDark, kDarkA, "dark" } };
+    auto otherPalette = s.engine->createPalette(s.doc, other);
+    LS_REQUIRE(otherPalette.ok());
+    auto apart = s.engine->createSprite(s.doc);
+    LS_REQUIRE(apart.ok());
+    LS_REQUIRE(s.engine->bindSpritePalette(apart.value, otherPalette.value).ok());
+    s.engine->compileSprite(apart.value, profile);
+    s.engine->setPaletteColor(s.palette, kDark, kDarkA);
+    auto dirty = s.engine->isDirty(apart.value.value);
+    LS_CHECK(dirty.ok() && !dirty.value);
+}
+
 int main() {
     testADitherFromRolesFollowsThePalette();
+    testAPaletteWriteDirtiesEverySpriteThatUsesIt();
     testADitherFromLiteralsIgnoresThePalette();
     testARemovedSlotFallsBackToTheLiteral();
     testTheDocumentKnowsWhatUsesARole();

@@ -657,6 +657,23 @@ PaletteId LSContext::Impl::effectivePalette(SpriteId sprite) const {
     return doc ? doc->palette : PaletteId::null();
 }
 
+void LSContext::Impl::markPaletteDirty(PaletteId palette) {
+    markDirtyInternal(palette.value);
+    const PaletteData* data = findPalette(palette);
+    if (data == nullptr) {
+        return;
+    }
+    const DocumentData* doc = findDocument(data->document);
+    if (doc == nullptr) {
+        return;
+    }
+    for (SpriteId sprite : doc->sprites) {
+        if (effectivePalette(sprite) == palette) {
+            markDirtyInternal(sprite.value);
+        }
+    }
+}
+
 Color LSContext::Impl::resolveColorRole(PaletteId palette, ColorRole role, Color fallback) const {
     if (role == kColorRoleNone) {
         return fallback;
@@ -1146,6 +1163,11 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
 
     if (SpriteData* clone = impl_->findSprite(cloneId)) {
         clone->palette = sourceCopy.palette;
+        if (clone->palette.valid()) {
+            // The binding came with the copy; the edge that goes with a
+            // binding has to as well, or a palette write never reaches it.
+            impl_->addDependencyEdge(clone->palette.value, cloneId.value);
+        }
         clone->transform = sourceCopy.transform;
         auto remapped = pivotRemap.find(sourceCopy.pivot.value);
         if (remapped != pivotRemap.end()) {
@@ -2370,7 +2392,7 @@ VoidResult LSContext::setPaletteColor(PaletteId palette, ColorRole role, Color c
     }
     data->colors[role] = color;
     ++impl_->resourceRevision;
-    impl_->markDirtyInternal(palette.value);
+    impl_->markPaletteDirty(palette);
     return VoidResult::success();
 }
 
@@ -2384,7 +2406,7 @@ VoidResult LSContext::removePaletteColor(PaletteId palette, ColorRole role) {
     }
     data->labels.erase(role);
     ++impl_->resourceRevision;
-    impl_->markDirtyInternal(palette.value);
+    impl_->markPaletteDirty(palette);
     return VoidResult::success();
 }
 
@@ -2475,7 +2497,7 @@ VoidResult LSContext::bindDocumentPalette(DocumentId doc, PaletteId palette) {
     document->palette = palette;
     ++impl_->resourceRevision;
     impl_->markDirtyInternal(doc.value);
-    impl_->markDirtyInternal(palette.value);
+    impl_->markPaletteDirty(palette);     // every sprite now resolving through it
     return VoidResult::success();
 }
 
