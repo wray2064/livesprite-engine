@@ -78,13 +78,14 @@ than asking you to compare by eye.
 | [Contributing](CONTRIBUTING.md) | The licence grant, the determinism rules, adding an operation |
 | [Engine spec](LIVESPRITE_ENGINE_SPEC.md) | The implementation contract |
 | [Architecture](Livesprite%20architecture.txt) | The wider design: engine, Fast, Pract |
+| [Handoff](https://github.com/wray2064/sprits-fast/blob/main/docs/handoff.md) | Where both products stand, what each part is, and the traps — lives in the editor repo |
 
 ## Repository
 
 ```
 include/livesprite/   the public API: one header per area, livesprite.h pulls them all in
 src/                  the implementation, split the way the spec splits it
-tests/                13 suites, one per area, run under ctest (one of them C)
+tests/                18 suites, one per area, run under ctest (one of them C)
 tools/                the testbed gallery and the benchmark
 examples/             the worked example the documentation quotes
 ```
