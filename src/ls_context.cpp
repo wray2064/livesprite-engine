@@ -1663,6 +1663,12 @@ Result<EllipseDesc> LSContext::getEllipse(GeometryId id) const {
 Result<PolylineDesc> LSContext::getPolyline(GeometryId id) const {
     return readGeometryImpl<PolylineDesc>(*impl_, id);
 }
+Result<PolygonDesc> LSContext::getPolygon(GeometryId id) const {
+    return readGeometryImpl<PolygonDesc>(*impl_, id);
+}
+Result<CurveDesc> LSContext::getCurve(GeometryId id) const {
+    return readGeometryImpl<CurveDesc>(*impl_, id);
+}
 
 Result<GeometryBounds> LSContext::getGeometryBounds(GeometryId id) const {
     const GeometryData* data = impl_->findGeometry(id);

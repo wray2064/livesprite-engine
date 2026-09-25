@@ -91,6 +91,26 @@ void testGeometryReadsBack(LSContext& ctx) {
     LS_REQUIRE(points.ok());
     LS_CHECK(points.value.points.size() == 2 && points.value.points[1].x == 9.f);
     LS_CHECK(ctx.getRect(GeometryId::null()).fail());
+
+    auto polygon = ctx.createPolygon(doc.value, {{{1.f, 1.f}, {9.f, 2.f}, {4.f, 8.f}}});
+    LS_REQUIRE(polygon.ok());
+    auto corners = ctx.getPolygon(polygon.value);
+    LS_REQUIRE(corners.ok());
+    LS_CHECK(corners.value.vertices.size() == 3 && corners.value.vertices[2].y == 8.f);
+    LS_CHECK(ctx.updatePolygon(polygon.value, {{{0.f, 0.f}, {5.f, 0.f}, {5.f, 5.f}, {0.f, 5.f}}}).ok());
+    LS_CHECK(ctx.getPolygon(polygon.value).value.vertices.size() == 4);
+    LS_CHECK(ctx.getCurve(polygon.value).fail());
+
+    CurveDesc s;
+    s.segments.push_back({{0.f, 0.f}, {4.f, 0.f}, {8.f, 4.f}, {8.f, 8.f}});
+    s.closed = true;
+    auto curve = ctx.createCurve(doc.value, s);
+    LS_REQUIRE(curve.ok());
+    auto read2 = ctx.getCurve(curve.value);
+    LS_REQUIRE(read2.ok());
+    LS_CHECK(read2.value.closed && read2.value.segments.size() == 1);
+    LS_CHECK(read2.value.segments[0].cp1.x == 8.f && read2.value.segments[0].cp1.y == 4.f);
+    LS_CHECK(ctx.getPolygon(curve.value).fail());
 }
 
 void testRegions(LSContext& ctx) {

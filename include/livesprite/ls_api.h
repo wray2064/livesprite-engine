@@ -511,6 +511,8 @@ public:
     Result<RectDesc>     getRect(GeometryId id) const;
     Result<EllipseDesc>  getEllipse(GeometryId id) const;
     Result<PolylineDesc> getPolyline(GeometryId id) const;
+    Result<PolygonDesc>  getPolygon(GeometryId id) const;
+    Result<CurveDesc>    getCurve(GeometryId id) const;
 
     // =======================================================================
     // SECTION 3: Region Operations
