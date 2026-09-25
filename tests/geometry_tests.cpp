@@ -142,6 +142,41 @@ void testPrimitives() {
     LS_CHECK(std::fabs(flattened.front().x - 0.f) < 0.001f);
     LS_CHECK(std::fabs(flattened.back().x - 10.f) < 0.001f);
     LS_CHECK(!geom::rasterizeCurve(curve).empty());
+
+    // An open curve is pixel-perfect: a straight one from (0,0) to (10,5),
+    // flattened into many short segments, is the 11 pixels of the line and
+    // no L-shaped corner doubles any of them.
+    {
+        CurveDesc straight;
+        straight.segments.push_back({ { 0.5f, 0.5f }, { 3.83f, 2.17f }, { 7.17f, 3.83f },
+                                      { 10.5f, 5.5f } });
+        const IntervalSet line = geom::rasterizeCurve(straight);
+        LS_CHECK(geom::pixelCount(line) == 11);
+        LS_CHECK(geom::contains(line, { 0, 0 }) && geom::contains(line, { 10, 5 }));
+        // And a bend: no pixel has a neighbour both across and down that are
+        // themselves diagonal to each other.
+        CurveDesc bend;
+        bend.segments.push_back({ { 0.5f, 0.5f }, { 12.5f, 0.5f }, { 12.5f, 0.5f },
+                                  { 12.5f, 12.5f } });
+        const IntervalSet arc = geom::rasterizeCurve(bend);
+        int corners = 0;
+        for (int32_t y = 0; y <= 13; ++y) {
+            for (int32_t x = 0; x <= 13; ++x) {
+                if (!geom::contains(arc, { x, y })) {
+                    continue;
+                }
+                for (int sx : { -1, 1 }) {
+                    for (int sy : { -1, 1 }) {
+                        if (geom::contains(arc, { x + sx, y }) && geom::contains(arc, { x, y + sy }) &&
+                            !geom::contains(arc, { x + sx, y + sy })) {
+                            ++corners;
+                        }
+                    }
+                }
+            }
+        }
+        LS_CHECK(corners == 0);
+    }
 }
 
 void testContours() {

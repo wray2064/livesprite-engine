@@ -729,10 +729,70 @@ IntervalSet rasterizeCurve(const CurveDesc& desc) {
     if (path.size() < 2) {
         return path.empty() ? IntervalSet{} : rasterizePoint({path.front()});
     }
-    PolylineDesc polyline;
-    polyline.points = path;
-    polyline.closed = desc.closed;
-    return rasterizePolyline(polyline);
+    if (desc.closed) {
+        PolylineDesc polyline;
+        polyline.points = path;
+        polyline.closed = true;
+        return rasterizePolyline(polyline);
+    }
+
+    // Open, the curve is a line one pixel wide, and drawn the way pixel
+    // artists draw one: the pixels in the order the curve visits them, and
+    // then without the L-shaped corners that a stair of short segments leaves
+    // doubled. Plotting each flattened segment into a set instead gives a line
+    // that thickens wherever it turns.
+    std::vector<Vec2i> walk;
+    const auto visit = [&walk](int32_t x, int32_t y) {
+        if (!walk.empty() && walk.back().x == x && walk.back().y == y) {
+            return;
+        }
+        // Straight back to the pixel before: a wobble of the flattening, not
+        // a stroke -- take the last step back instead.
+        if (walk.size() >= 2 && walk[walk.size() - 2].x == x && walk[walk.size() - 2].y == y) {
+            walk.pop_back();
+            return;
+        }
+        walk.push_back({ x, y });
+    };
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        int32_t x0 = static_cast<int32_t>(std::floor(path[i].x));
+        int32_t y0 = static_cast<int32_t>(std::floor(path[i].y));
+        const int32_t x1 = static_cast<int32_t>(std::floor(path[i + 1].x));
+        const int32_t y1 = static_cast<int32_t>(std::floor(path[i + 1].y));
+        const int32_t dx =  std::abs(x1 - x0);
+        const int32_t dy = -std::abs(y1 - y0);
+        const int32_t sx = x0 < x1 ? 1 : -1;
+        const int32_t sy = y0 < y1 ? 1 : -1;
+        int32_t err = dx + dy;
+        while (true) {
+            visit(x0, y0);
+            if (x0 == x1 && y0 == y1) {
+                break;
+            }
+            const int32_t e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+    }
+    std::vector<Vec2i> kept;
+    kept.reserve(walk.size());
+    for (const Vec2i& p : walk) {
+        if (kept.size() >= 2) {
+            const Vec2i& a = kept[kept.size() - 2];
+            const Vec2i& b = kept.back();
+            const bool corner = std::abs(p.x - a.x) == 1 && std::abs(p.y - a.y) == 1 &&
+                                (b.x == a.x || b.y == a.y) && (b.x == p.x || b.y == p.y);
+            if (corner) {
+                kept.pop_back();
+            }
+        }
+        kept.push_back(p);
+    }
+    PixelSet pixels;
+    for (const Vec2i& p : kept) {
+        pixels.insert(pixelKey(p.x, p.y));
+    }
+    return fromPixelSet(pixels);
 }
 
 // ---------------------------------------------------------------------------
