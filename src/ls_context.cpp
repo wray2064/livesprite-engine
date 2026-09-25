@@ -2161,6 +2161,16 @@ VoidResult LSContext::setLayerVisibility(LayerId id, bool visible) {
     return VoidResult::success();
 }
 
+VoidResult LSContext::setLayerType(LayerId id, LayerType type) {
+    LayerData* data = impl_->findLayer(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    data->desc.type = type;
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
+
 VoidResult LSContext::setLayerOpacity(LayerId id, float opacity) {
     LayerData* data = impl_->findLayer(id);
     if (data == nullptr) {

@@ -564,6 +564,10 @@ public:
     // in an interface, and an interface that shows a name is asked to change it.
     VoidResult  setLayerName(LayerId id, std::string_view name);
     VoidResult  setLayerVisibility(LayerId id, bool visible);
+    // A layer's type after it was made. Source means a reference to draw from:
+    // an Export compile leaves it out, and it never counts towards the whole
+    // sprite's silhouette, so tracing the figure does not trace the reference.
+    VoidResult  setLayerType(LayerId id, LayerType type);
     VoidResult  setLayerOpacity(LayerId id, float opacity);
     VoidResult  setLayerBlendMode(LayerId id, BlendMode mode);
     VoidResult  setLayerMask(LayerId id, RegionId mask);

@@ -2589,6 +2589,15 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
     if (order.fail()) {
         return Result<CompileResult>::err(order.error);
     }
+    // A reference layer is there to draw from, not to ship.
+    if (resolved.type == CompileProfileType::Export) {
+        order.value.erase(std::remove_if(order.value.begin(), order.value.end(),
+                              [&](LayerId layer) {
+                                  const LayerData* data = impl_->findLayer(layer);
+                                  return data != nullptr && data->desc.type == LayerType::Source;
+                              }),
+                          order.value.end());
+    }
 
     // Layers inside a group composite into the group buffer first, so the group
     // opacity and blend apply to the group as a whole rather than to each layer
@@ -2648,11 +2657,15 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         silhouette = std::move(allocatedMask.value);
 
         for (LayerId layerId : order.value) {
+            const LayerData* layer = impl_->findLayer(layerId);
+            // The figure is what the sprite is made of, not what it is drawn from.
+            if (layer != nullptr && layer->desc.type == LayerType::Source) {
+                continue;
+            }
             auto pass = compileLayerWithin(layerId, resolved, nullptr, true);
             if (pass.fail()) {
                 continue;
             }
-            const LayerData* layer = impl_->findLayer(layerId);
 
             // A clipping layer draws nothing outside its base, so it must not
             // widen the silhouette either.

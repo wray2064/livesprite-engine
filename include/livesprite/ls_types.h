@@ -375,7 +375,7 @@ enum class PalettePolicy : uint8_t {
 enum class LayerType : uint8_t {
     Drawing,     // standard drawing layer (app label only)
     Generated,   // app hint: content is generated
-    Source,      // app hint: content is a source reference
+    Source,      // a reference to draw from: compiled for previews, left out of exports
     Export,      // app hint: this is an export group root
 };
 

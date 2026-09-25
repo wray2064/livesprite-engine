@@ -357,6 +357,46 @@ void testDependencies(LSContext& ctx) {
 
 } // namespace
 
+// A Source layer is a reference: a preview draws it, an export does not, and
+// it survives a save as what it is.
+void testReferenceLayers(LSContext& ctx) {
+    auto doc = ctx.createDocument({"reference", 16, 16});
+    auto sprite = ctx.createSprite(doc.value);
+    auto art = ctx.createLayer(sprite.value, {"art"});
+    auto guide = ctx.createLayer(sprite.value, {"guide"});
+    auto left = ctx.createRegionFromGeometry(ctx.createRect(doc.value, {{0.f, 0.f}, 4.f, 4.f, 0.f}).value);
+    auto right = ctx.createRegionFromGeometry(ctx.createRect(doc.value, {{8.f, 8.f}, 4.f, 4.f, 0.f}).value);
+    FillSolidOp fill;
+    fill.targetRegion = left.value;
+    fill.fallbackColor = {200, 40, 40, 255};
+    LS_CHECK(ctx.addOperation(art.value, fill).ok());
+    fill.targetRegion = right.value;
+    fill.fallbackColor = {40, 40, 200, 255};
+    LS_CHECK(ctx.addOperation(guide.value, fill).ok());
+    LS_CHECK(ctx.setLayerType(guide.value, LayerType::Source).ok());
+    LS_CHECK(ctx.getLayerInfo(guide.value).value.type == LayerType::Source);
+    LS_CHECK(ctx.setLayerType(LayerId::null(), LayerType::Source).fail());
+
+    CompileProfile preview;
+    preview.type = CompileProfileType::Preview;
+    preview.outputWidth = 16;
+    preview.outputHeight = 16;
+    CompileProfile exporting = preview;
+    exporting.type = CompileProfileType::Export;
+    auto shown = ctx.compileSprite(sprite.value, preview);
+    auto shipped = ctx.compileSprite(sprite.value, exporting);
+    LS_REQUIRE(shown.ok() && shipped.ok());
+    LS_CHECK(readPixel(shown.value.raster, 9, 9).a != 0);
+    LS_CHECK(readPixel(shipped.value.raster, 9, 9).a == 0);
+    LS_CHECK(readPixel(shipped.value.raster, 1, 1).a != 0);
+
+    // Back to a drawing layer, it ships again.
+    LS_CHECK(ctx.setLayerType(guide.value, LayerType::Drawing).ok());
+    auto again = ctx.compileSprite(sprite.value, exporting);
+    LS_REQUIRE(again.ok());
+    LS_CHECK(readPixel(again.value.raster, 9, 9).a != 0);
+}
+
 int main() {
     auto ctx = LSContext::create();
     LS_REQUIRE_MAIN(ctx != nullptr);
@@ -369,6 +409,7 @@ int main() {
     testPalettesAndPatterns(*ctx);
     testAnchors(*ctx);
     testDependencies(*ctx);
+    testReferenceLayers(*ctx);
 
     return lstest::report("context");
 }
