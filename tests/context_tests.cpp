@@ -63,6 +63,36 @@ void testEntities(LSContext& ctx) {
     LS_CHECK(ctx.getSpriteInfo(sprite.value).value.layers.size() == 1);
 }
 
+// A geometry reads back exactly as it was last described -- corner radius
+// and all -- and asking for the wrong kind is refused rather than answered.
+void testGeometryReadsBack(LSContext& ctx) {
+    auto doc = ctx.createDocument({"shapes", 32, 32});
+    LS_REQUIRE(doc.ok());
+    auto rect = ctx.createRect(doc.value, {{2.f, 3.f}, 10.f, 6.f, 2.5f});
+    LS_REQUIRE(rect.ok());
+    auto read = ctx.getRect(rect.value);
+    LS_REQUIRE(read.ok());
+    LS_CHECK(read.value.origin.x == 2.f && read.value.origin.y == 3.f);
+    LS_CHECK(read.value.width == 10.f && read.value.height == 6.f);
+    LS_CHECK(read.value.cornerRadius == 2.5f);
+
+    LS_CHECK(ctx.updateRect(rect.value, {{4.f, 4.f}, 8.f, 8.f, 1.f}).ok());
+    LS_CHECK(ctx.getRect(rect.value).value.cornerRadius == 1.f);
+    LS_CHECK(ctx.getEllipse(rect.value).fail());
+    LS_CHECK(ctx.getPolyline(rect.value).fail());
+
+    auto oval = ctx.createEllipse(doc.value, {{16.f, 16.f}, 5.f, 3.f});
+    LS_REQUIRE(oval.ok());
+    LS_CHECK(ctx.getEllipse(oval.value).value.radiusX == 5.f);
+
+    auto line = ctx.createPolyline(doc.value, {{{1.f, 1.f}, {9.f, 4.f}}, false});
+    LS_REQUIRE(line.ok());
+    auto points = ctx.getPolyline(line.value);
+    LS_REQUIRE(points.ok());
+    LS_CHECK(points.value.points.size() == 2 && points.value.points[1].x == 9.f);
+    LS_CHECK(ctx.getRect(GeometryId::null()).fail());
+}
+
 void testRegions(LSContext& ctx) {
     auto doc = ctx.createDocument({"regions", 32, 32});
     auto rect = ctx.createRect(doc.value, {{4.f, 4.f}, 8.f, 8.f, 0.f});
@@ -313,6 +343,7 @@ int main() {
     LS_CHECK(ctx->engineVersion() == LS_ENGINE_VERSION);
 
     testEntities(*ctx);
+    testGeometryReadsBack(*ctx);
     testRegions(*ctx);
     testOperations(*ctx);
     testPalettesAndPatterns(*ctx);

@@ -1639,6 +1639,31 @@ VoidResult LSContext::updatePolygon(GeometryId id, const PolygonDesc& desc) {
     return updateGeometryImpl(*impl_, id, desc);
 }
 
+namespace {
+template<typename Desc>
+Result<Desc> readGeometryImpl(const LSContext::Impl& impl, GeometryId id) {
+    const GeometryData* data = impl.findGeometry(id);
+    if (data == nullptr) {
+        return Result<Desc>::err(LSError::InvalidId);
+    }
+    const Desc* desc = std::get_if<Desc>(&data->shape);
+    if (desc == nullptr) {
+        return Result<Desc>::err(LSError::OperationTypeMismatch);
+    }
+    return Result<Desc>::ok(*desc);
+}
+} // namespace
+
+Result<RectDesc> LSContext::getRect(GeometryId id) const {
+    return readGeometryImpl<RectDesc>(*impl_, id);
+}
+Result<EllipseDesc> LSContext::getEllipse(GeometryId id) const {
+    return readGeometryImpl<EllipseDesc>(*impl_, id);
+}
+Result<PolylineDesc> LSContext::getPolyline(GeometryId id) const {
+    return readGeometryImpl<PolylineDesc>(*impl_, id);
+}
+
 Result<GeometryBounds> LSContext::getGeometryBounds(GeometryId id) const {
     const GeometryData* data = impl_->findGeometry(id);
     if (data == nullptr) {

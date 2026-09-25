@@ -502,6 +502,16 @@ public:
     Result<GeometryBounds> getGeometryBounds(GeometryId id) const;
     Result<std::vector<Vec2f>> getGeometryPath(GeometryId id) const;
 
+    // What a geometry was described with, read back exactly: the counterpart
+    // of each update. Bounds and paths are rasterised or flattened answers,
+    // and an application that edits a shape -- moves a rounded rectangle,
+    // turns it with the canvas -- needs the description itself, or it writes
+    // the shape back without its corner radius. OperationTypeMismatch when
+    // the geometry is some other kind.
+    Result<RectDesc>     getRect(GeometryId id) const;
+    Result<EllipseDesc>  getEllipse(GeometryId id) const;
+    Result<PolylineDesc> getPolyline(GeometryId id) const;
+
     // =======================================================================
     // SECTION 3: Region Operations
     // =======================================================================
