@@ -6,6 +6,7 @@
 
 #include "livesprite/livesprite.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -111,6 +112,40 @@ struct PaletteData {
     std::string                name;
     std::map<ColorRole, Color> colors;    // ordered: iteration must be deterministic
     std::map<ColorRole, std::string> labels;
+
+    // The order a person sees the slots in. A role is an identity -- pixels
+    // name it -- so reordering the swatches cannot renumber roles; it
+    // reorders this. Matching and quantisation still walk `colors`, so a
+    // reorder changes no compiled pixel.
+    std::vector<ColorRole> order;
+
+    void noteRole(ColorRole role) {
+        if (std::find(order.begin(), order.end(), role) == order.end()) {
+            order.push_back(role);
+        }
+    }
+    void forgetRole(ColorRole role) {
+        order.erase(std::remove(order.begin(), order.end(), role), order.end());
+    }
+    // Every role once, in display order, whatever state `order` was left in
+    // -- a role it lacks goes at the end in role order, one it names that no
+    // longer exists is skipped.
+    std::vector<ColorRole> ordered() const {
+        std::vector<ColorRole> out;
+        out.reserve(colors.size());
+        for (ColorRole role : order) {
+            if (colors.count(role) != 0 &&
+                std::find(out.begin(), out.end(), role) == out.end()) {
+                out.push_back(role);
+            }
+        }
+        for (const auto& [role, color] : colors) {
+            if (std::find(out.begin(), out.end(), role) == out.end()) {
+                out.push_back(role);
+            }
+        }
+        return out;
+    }
 };
 
 struct RampData {

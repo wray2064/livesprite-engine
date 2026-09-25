@@ -535,6 +535,14 @@ static void test_palette_roles(void) {
     raster = NULL;
 
     /* Take the slot out: the stop falls back to its literal. */
+    {
+        /* The order: a permutation of what is there, and nothing else. */
+        const uint32_t reversed[] = { 2u, 1u };
+        const uint32_t short_list[] = { 2u };
+        CHECK_OK(ls_palette_set_order(ctx, palette, reversed, 2));
+        CHECK(ls_palette_set_order(ctx, palette, short_list, 1) != LS_OK);
+        CHECK(ls_palette_set_order(ctx, palette, NULL, 2) != LS_OK);
+    }
     CHECK_OK(ls_palette_remove_color(ctx, palette, 1u));
     CHECK(ls_palette_remove_color(ctx, palette, 1u) != LS_OK);   /* gone already */
     {

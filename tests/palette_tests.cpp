@@ -230,6 +230,47 @@ void testLabelsAreKeptAndCanChange() {
     LS_CHECK(s.engine->setPaletteLabel(s.palette, 99, "ghost").fail());
 }
 
+// The order of the swatches is presentation: reordering renumbers nothing, so
+// no compiled pixel changes; it is what getPaletteEntries answers in and what
+// a save keeps; a new slot joins at the end and a removed one leaves; and only
+// a permutation of the slots that exist is accepted.
+void testOrderIsPresentationNotIdentity() {
+    Scene s;
+    LS_REQUIRE(s.build());
+    LS_REQUIRE(s.ditherWith(true));
+    const RasterBuffer before = s.render();
+
+    LS_REQUIRE(s.engine->setPaletteOrder(s.palette, { kLight, kDark }).ok());
+    auto entries = s.engine->getPaletteEntries(s.palette);
+    LS_REQUIRE(entries.ok() && entries.value.size() == 2);
+    LS_CHECK(entries.value[0].role == kLight && entries.value[0].label == "light");
+    LS_CHECK(s.render().pixels == before.pixels);
+
+    LS_REQUIRE(s.engine->setPaletteColor(s.palette, 7, Color{ 9, 9, 9, 255 }).ok());
+    entries = s.engine->getPaletteEntries(s.palette);
+    LS_CHECK(entries.value.size() == 3 && entries.value[2].role == 7);
+    LS_REQUIRE(s.engine->setPaletteOrder(s.palette, { 7, kLight, kDark }).ok());
+    LS_REQUIRE(s.engine->removePaletteColor(s.palette, kLight).ok());
+    entries = s.engine->getPaletteEntries(s.palette);
+    LS_CHECK(entries.value.size() == 2 && entries.value[0].role == 7 &&
+             entries.value[1].role == kDark);
+
+    LS_CHECK(s.engine->setPaletteOrder(s.palette, { kDark }).fail());          // one missing
+    LS_CHECK(s.engine->setPaletteOrder(s.palette, { kDark, kDark }).fail());   // twice
+    LS_CHECK(s.engine->setPaletteOrder(s.palette, { kDark, 42 }).fail());      // not there
+
+    auto saved = s.engine->serializeDocument(s.doc);
+    LS_REQUIRE(saved.ok());
+    auto reader = LSContext::create();
+    auto loaded = reader->deserializeDocument(saved.value);
+    LS_REQUIRE(loaded.ok());
+    auto info = reader->getDocumentInfo(loaded.value);
+    LS_REQUIRE(info.ok() && !info.value.palettes.empty());
+    auto read = reader->getPaletteEntries(info.value.palettes.front());
+    LS_REQUIRE(read.ok() && read.value.size() == 2);
+    LS_CHECK(read.value[0].role == 7 && read.value[1].role == kDark);
+}
+
 // The role on a stop is part of the document, so it survives a save -- and a
 // stop without one is written without one, so an old file reads unchanged.
 void testRoleStopsSurviveARoundTrip() {
@@ -422,6 +463,7 @@ int main() {
     testARemovedSlotFallsBackToTheLiteral();
     testTheDocumentKnowsWhatUsesARole();
     testLabelsAreKeptAndCanChange();
+    testOrderIsPresentationNotIdentity();
     testRoleStopsSurviveARoundTrip();
     testRemapLeavesRoleStopsAlone();
     return lstest::report("palettes");

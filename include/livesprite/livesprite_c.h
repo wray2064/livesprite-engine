@@ -302,6 +302,12 @@ LS_C_API ls_error ls_palette_set_name(ls_context* ctx, ls_id palette, const char
  * the next compile; nothing is rewritten. */
 LS_C_API ls_error ls_palette_remove_color(ls_context* ctx, ls_id palette, uint32_t role);
 
+/* The order the slots are shown and saved in: `count` roles, a permutation of
+ * the slots the palette holds. Presentation only -- no role changes number,
+ * so nothing painted through a slot changes. */
+LS_C_API ls_error ls_palette_set_order(ls_context* ctx, ls_id palette,
+                                       const uint32_t* roles, size_t count);
+
 /* A slot's name for a panel. NULL or "" clears it. The engine never reads it. */
 LS_C_API ls_error ls_palette_set_label(ls_context* ctx, ls_id palette, uint32_t role,
                                        const char* label);

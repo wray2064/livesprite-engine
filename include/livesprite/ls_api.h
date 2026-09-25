@@ -597,6 +597,12 @@ public:
     // An editor deciding whether to warn first can ask usesPaletteRole below.
     VoidResult          removePaletteColor(PaletteId palette, ColorRole role);
 
+    // The order the slots are shown and saved in: a permutation of the roles
+    // the palette holds. getPaletteEntries answers in it. It is presentation,
+    // not identity -- no role changes number, so nothing painted through a
+    // slot notices, and nothing compiles differently.
+    VoidResult          setPaletteOrder(PaletteId palette, const std::vector<ColorRole>& order);
+
     // A slot's name in a panel -- "skin", "outline", "shadow 2". The engine
     // stores it and never reads it. It is in PaletteColorEntry on the way out;
     // this is the way to change one after the palette exists.

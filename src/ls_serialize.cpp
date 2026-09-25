@@ -694,8 +694,11 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
         json::Value obj = json::Value::object();
         obj["id"] = enc(paletteId);
         obj["name"] = enc(data->name);
+        // In display order, which is how the order is saved: a reader that
+        // takes the entries as they come gets the swatches as they were.
         json::Value entries = json::Value::array();
-        for (const auto& [role, color] : data->colors) {
+        for (ColorRole role : data->ordered()) {
+            const Color color = data->colors.at(role);
             json::Value entry = json::Value::object();
             entry["role"] = enc(role);
             entry["color"] = enc(color);
@@ -1082,6 +1085,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
                         continue;
                     }
                     palette.colors[role] = color;
+                    palette.noteRole(role);
                     if (const json::Value* label = entry.find("label")) {
                         palette.labels[role] = label->asString();
                     }

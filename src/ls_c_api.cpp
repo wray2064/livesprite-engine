@@ -659,6 +659,18 @@ ls_error ls_palette_remove_color(ls_context* ctx, ls_id palette, uint32_t role) 
     return toError(engine.removePaletteColor(asId<PaletteId>(palette), role).error);
 }
 
+ls_error ls_palette_set_order(ls_context* ctx, ls_id palette,
+                              const uint32_t* roles, size_t count) {
+    LS_C_CONTEXT(ctx);
+    if (roles == nullptr && count != 0) {
+        return LS_ERROR_NULL_ARGUMENT;
+    }
+    return guarded([&] {
+        std::vector<ls::ColorRole> order(roles, roles + count);
+        return toError(engine.setPaletteOrder(asId<PaletteId>(palette), order).error);
+    });
+}
+
 ls_error ls_palette_set_label(ls_context* ctx, ls_id palette, uint32_t role,
                               const char* label) {
     LS_C_CONTEXT(ctx);

@@ -2441,6 +2441,7 @@ Result<PaletteId> LSContext::createPalette(DocumentId doc, const PaletteDesc& de
             continue;
         }
         data.colors[entry.role] = entry.color;
+        data.noteRole(entry.role);
         if (!entry.label.empty()) {
             data.labels[entry.role] = entry.label;
         }
@@ -2486,8 +2487,36 @@ VoidResult LSContext::setPaletteColor(PaletteId palette, ColorRole role, Color c
         return VoidResult::err(LSError::InvalidParameter);
     }
     data->colors[role] = color;
+    data->noteRole(role);
     ++impl_->resourceRevision;
     impl_->markPaletteDirty(palette);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::setPaletteOrder(PaletteId palette, const std::vector<ColorRole>& order) {
+    PaletteData* data = impl_->findPalette(palette);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    // A permutation of the roles the palette holds, and nothing else: an
+    // order that drops a slot would hide it, and one that names a slot twice
+    // would show it twice.
+    if (order.size() != data->colors.size()) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    std::vector<ColorRole> seen;
+    seen.reserve(order.size());
+    for (ColorRole role : order) {
+        if (data->colors.count(role) == 0 ||
+            std::find(seen.begin(), seen.end(), role) != seen.end()) {
+            return VoidResult::err(LSError::InvalidParameter);
+        }
+        seen.push_back(role);
+    }
+    data->order = order;
+    // Nothing compiles differently, but a palette's order is part of what is
+    // saved, and a document that changed has to say so.
+    ++impl_->resourceRevision;
     return VoidResult::success();
 }
 
@@ -2500,6 +2529,7 @@ VoidResult LSContext::removePaletteColor(PaletteId palette, ColorRole role) {
         return VoidResult::err(LSError::InvalidParameter);
     }
     data->labels.erase(role);
+    data->forgetRole(role);
     ++impl_->resourceRevision;
     impl_->markPaletteDirty(palette);
     return VoidResult::success();
@@ -2653,10 +2683,10 @@ Result<std::vector<PaletteColorEntry>> LSContext::getPaletteEntries(PaletteId pa
     }
     std::vector<PaletteColorEntry> entries;
     entries.reserve(data->colors.size());
-    for (const auto& [role, color] : data->colors) {
+    for (ColorRole role : data->ordered()) {
         PaletteColorEntry entry;
         entry.role = role;
-        entry.color = color;
+        entry.color = data->colors.at(role);
         auto label = data->labels.find(role);
         if (label != data->labels.end()) {
             entry.label = label->second;
