@@ -357,6 +357,8 @@ enum class SamplingPolicy : uint8_t {
     Median,     // median of covered sub-samples
     Average,    // average of sub-samples
     Threshold,  // binary: covered or not
+    RotSprite,  // pixel art: the source enlarged 8x by Scale2x, then nearest --
+                // clean diagonals where plain sampling leaves jaggies and holes
 };
 
 enum class AlphaPolicy : uint8_t {

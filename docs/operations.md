@@ -87,7 +87,7 @@ what has already been resolved in the same layer.
 | Operation | Notes |
 |---|---|
 | `TranslateOp` | `delta`, plus a rounding policy |
-| `RotateOp` | `angleDegrees`, `pivot` or `pivotFallback`, sampling, rounding |
+| `RotateOp` | `angleDegrees`, `pivot` or `pivotFallback`, sampling, rounding. `SamplingPolicy::RotSprite` enlarges the source 8x with Scale2x and samples that, for pixel art that keeps clean diagonals when turned |
 | `ScaleOp` | `factor`, pivot, sampling, rounding |
 | `MirrorOp` | `MirrorAxis::X` flips left to right |
 | `ShearOp` | Shear factors per axis |

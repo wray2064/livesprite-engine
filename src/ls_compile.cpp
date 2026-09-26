@@ -377,6 +377,47 @@ bool isOrthogonalTransform(const Mat3f& matrix) {
 // -------------------------------------------------------------------------
 using SamplePolicyFn = std::function<Color(const std::vector<Color>&)>;
 
+// Scale2x: each pixel becomes four, and where two of its neighbours agree
+// with each other and not with the others, the corner between them takes
+// their colour -- which turns a staircase into a diagonal instead of a
+// bigger staircase. Outside the picture counts as transparent.
+RasterBuffer scale2x(const RasterBuffer& source) {
+    auto allocated = allocateRaster(source.width * 2, source.height * 2);
+    if (allocated.fail()) {
+        return RasterBuffer{};
+    }
+    RasterBuffer out = std::move(allocated.value);
+    const auto at = [&](int32_t x, int32_t y) { return getRasterPixel(source, x, y); };
+    const auto same = [](Color a, Color b) {
+        return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    };
+    for (int32_t y = 0; y < static_cast<int32_t>(source.height); ++y) {
+        for (int32_t x = 0; x < static_cast<int32_t>(source.width); ++x) {
+            const Color p = at(x, y);
+            const Color a = at(x, y - 1);
+            const Color b = at(x + 1, y);
+            const Color c = at(x - 1, y);
+            const Color d = at(x, y + 1);
+            Color e0 = p, e1 = p, e2 = p, e3 = p;
+            if (!same(a, d) && !same(c, b)) {
+                if (same(c, a)) { e0 = a; }
+                if (same(a, b)) { e1 = b; }
+                if (same(d, c)) { e2 = c; }
+                if (same(b, d)) { e3 = d; }
+            }
+            setRasterPixel(out, 2 * x, 2 * y, e0);
+            setRasterPixel(out, 2 * x + 1, 2 * y, e1);
+            setRasterPixel(out, 2 * x, 2 * y + 1, e2);
+            setRasterPixel(out, 2 * x + 1, 2 * y + 1, e3);
+        }
+    }
+    return out;
+}
+
+// The largest picture RotSprite enlarges: 8x on each side is 64 times the
+// pixels, and past this the cost is a stall rather than a wait.
+constexpr uint64_t kMaxRotSpritePixels = 512ull * 512ull;
+
 RasterBuffer transformRaster(const RasterBuffer& source, const Mat3f& matrix,
                              SamplingPolicy sampling, float coverageThreshold,
                              const SamplePolicyFn& policy = {}) {
@@ -421,6 +462,32 @@ RasterBuffer transformRaster(const RasterBuffer& source, const Mat3f& matrix,
             setRasterPixel(out, keyX(key), keyY(key), color);
         }
         return out;
+    }
+
+    // RotSprite: the source enlarged eight times by Scale2x, then each pixel
+    // takes the enlarged pixel its centre lands on. A picture too large for
+    // that falls back to the majority of its sub-samples.
+    if (sampling == SamplingPolicy::RotSprite &&
+        static_cast<uint64_t>(source.width) * source.height <= kMaxRotSpritePixels) {
+        const RasterBuffer big = scale2x(scale2x(scale2x(source)));
+        if (!big.empty()) {
+            for (int32_t y = 0; y < static_cast<int32_t>(out.height); ++y) {
+                for (int32_t x = 0; x < static_cast<int32_t>(out.width); ++x) {
+                    const Vec2f mapped = invert.transformPoint({ static_cast<float>(x) + 0.5f,
+                                                                 static_cast<float>(y) + 0.5f });
+                    const Color color = getRasterPixel(
+                        big, static_cast<int32_t>(std::floor(mapped.x * 8.f)),
+                        static_cast<int32_t>(std::floor(mapped.y * 8.f)));
+                    if (color.a != 0) {
+                        setRasterPixel(out, x, y, color);
+                    }
+                }
+            }
+            return out;
+        }
+    }
+    if (sampling == SamplingPolicy::RotSprite) {
+        sampling = SamplingPolicy::Majority;
     }
 
     const bool singleSample = sampling == SamplingPolicy::Center && !policy;

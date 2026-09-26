@@ -438,6 +438,49 @@ void testDropShadow(LSContext& ctx) {
     LS_CHECK(readPixel(moved.value.raster, 5, 4).a == 0);
 }
 
+// RotSprite: a rotated line stays a line of the source's own colour, with no
+// colour that was not in the source and no hole where plain nearest sampling
+// can leave one.
+void testRotSprite(LSContext& ctx) {
+    auto doc = ctx.createDocument({"rotsprite", 32, 32});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"bar"});
+    auto rect = ctx.createRect(doc.value, {{6.f, 14.f}, 20.f, 3.f, 0.f});
+    auto region = ctx.createRegionFromGeometry(rect.value);
+    FillSolidOp fill;
+    fill.targetRegion = region.value;
+    fill.fallbackColor = {200, 60, 60, 255};
+    LS_CHECK(ctx.addOperation(layer.value, fill).ok());
+    RotateOp rotate;
+    rotate.targetLayer = layer.value;
+    rotate.angleDegrees = 30.f;
+    rotate.pivotFallback = {16.f, 16.f};
+    rotate.sampling = SamplingPolicy::RotSprite;
+    LS_REQUIRE(ctx.addOperation(layer.value, rotate).ok());
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 32;
+    profile.outputHeight = 32;
+    auto compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    int drawn = 0;
+    bool foreign = false;
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            const Color c = readPixel(compiled.value.raster, x, y);
+            if (c.a == 0) {
+                continue;
+            }
+            ++drawn;
+            foreign = foreign || c.r != 200 || c.g != 60 || c.b != 60;
+        }
+    }
+    LS_CHECK(!foreign);
+    // About the area it had: 60 pixels, give or take its edges.
+    LS_CHECK(drawn > 45 && drawn < 80);
+    LS_CHECK(readPixel(compiled.value.raster, 16, 16).a != 0);     // the middle stays
+}
+
 int main() {
     auto ctx = LSContext::create();
     LS_REQUIRE_MAIN(ctx != nullptr);
@@ -452,6 +495,7 @@ int main() {
     testDependencies(*ctx);
     testReferenceLayers(*ctx);
     testDropShadow(*ctx);
+    testRotSprite(*ctx);
 
     return lstest::report("context");
 }
