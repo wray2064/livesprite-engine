@@ -557,6 +557,38 @@ void keepThinLinesWhole(const RasterBuffer& source, const Mat3f& matrix, RasterB
             }
         }
     }
+
+    // Corners tidied, as a pixel artist draws a line: a pixel whose only
+    // neighbours of its colour are one above or below and one beside -- an L
+    // -- is not needed to join them, since they touch at the corner. It takes
+    // the colour on its other two sides when they agree, a fill or nothing.
+    // One at a time, looking again after each, so a staircase keeps a pixel on
+    // every step.
+    for (int32_t y = 0; y < static_cast<int32_t>(out.height); ++y) {
+        for (int32_t x = 0; x < static_cast<int32_t>(out.width); ++x) {
+            const Color c = getRasterPixel(out, x, y);
+            if (c.a == 0) {
+                continue;
+            }
+            const bool up = same(getRasterPixel(out, x, y - 1), c);
+            const bool down = same(getRasterPixel(out, x, y + 1), c);
+            const bool left = same(getRasterPixel(out, x - 1, y), c);
+            const bool right = same(getRasterPixel(out, x + 1, y), c);
+            const bool diagonal = same(getRasterPixel(out, x - 1, y - 1), c) ||
+                                  same(getRasterPixel(out, x + 1, y - 1), c) ||
+                                  same(getRasterPixel(out, x - 1, y + 1), c) ||
+                                  same(getRasterPixel(out, x + 1, y + 1), c);
+            if (diagonal || (up == down) || (left == right)) {
+                continue;
+            }
+            const Color across = getRasterPixel(out, x, up ? y + 1 : y - 1);
+            const Color beside = getRasterPixel(out, left ? x + 1 : x - 1, y);
+            if (!same(across, beside)) {
+                continue;
+            }
+            setRasterPixel(out, x, y, across);
+        }
+    }
 }
 
 // The largest picture RotSprite enlarges: 8x on each side is 64 times the
