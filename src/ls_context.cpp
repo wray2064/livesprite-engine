@@ -87,6 +87,21 @@ float colorDistanceSq(Color a, Color b) {
     return 0.30f * dr * dr + 0.59f * dg * dg + 0.11f * db * db + 1.0f * da * da;
 }
 
+// A face hears about what closes it in changing (see FaceDesc::walls).
+void wallEdges(LSContext::Impl& impl, const FaceDesc& face, uint64_t id, bool add) {
+    for (const RegionClipTerm& wall : face.walls) {
+        const uint64_t entity = wall.region.valid() ? wall.region.value : wall.geometry.value;
+        if (entity == 0 || entity == id) {
+            continue;
+        }
+        if (add) {
+            impl.addDependencyEdge(entity, id);
+        } else {
+            impl.removeDependencyEdge(entity, id);
+        }
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -515,6 +530,11 @@ VoidResult LSContext::restoreDocumentState(DocumentId doc, const DocumentSnapsho
     impl_->nextId = std::max(impl_->nextId, state.nextId);
 
     // Rebuild the edges the restored entities imply, then dirty the lot.
+    for (const auto& [id, data] : state.geometry) {
+        if (const FaceDesc* face = std::get_if<FaceDesc>(&data.shape)) {
+            wallEdges(*impl_, *face, id, true);
+        }
+    }
     for (const auto& [id, data] : state.regions) {
         if (data.source.valid()) {
             impl_->addDependencyEdge(data.source.value, id);
@@ -1441,6 +1461,29 @@ Result<LayerId> LSContext::cloneLayerInto(LayerId source, SpriteId into, int32_t
         addOperation(clonedLayer.value, copy);
     }
 
+    // A copied face closed in by what was copied with it is closed in by the
+    // copies.
+    for (const auto& [from, to] : tables.geometry) {
+        (void)from;
+        GeometryData* made = impl_->findGeometry(GeometryId{ to });
+        FaceDesc* face = made == nullptr ? nullptr : std::get_if<FaceDesc>(&made->shape);
+        if (face == nullptr || face->walls.empty()) {
+            continue;
+        }
+        wallEdges(*impl_, *face, to, false);
+        for (RegionClipTerm& wall : face->walls) {
+            auto region = tables.regions.find(wall.region.value);
+            if (wall.region.valid() && region != tables.regions.end()) {
+                wall.region = RegionId{ region->second };
+            }
+            auto shape = tables.geometry.find(wall.geometry.value);
+            if (wall.geometry.valid() && shape != tables.geometry.end()) {
+                wall.geometry = GeometryId{ shape->second };
+            }
+        }
+        wallEdges(*impl_, *face, to, true);
+    }
+
     // Into place. createLayer appends; a copy usually wants to sit right
     // above what it copied.
     if (atIndex >= 0) {
@@ -1899,7 +1942,11 @@ Result<GeometryId> LSContext::createArea(DocumentId doc, const AreaDesc& desc) {
     return createGeometryImpl(*impl_, doc, desc);
 }
 Result<GeometryId> LSContext::createFace(DocumentId doc, const FaceDesc& desc) {
-    return createGeometryImpl(*impl_, doc, desc);
+    auto made = createGeometryImpl(*impl_, doc, desc);
+    if (made.ok()) {
+        wallEdges(*impl_, desc, made.value.value, true);
+    }
+    return made;
 }
 Result<GeometryId> LSContext::createPolygon(DocumentId doc, const PolygonDesc& desc) {
     if (desc.vertices.size() < 3) {
@@ -1976,7 +2023,15 @@ VoidResult LSContext::updateArea(GeometryId id, const AreaDesc& desc) {
     return updateGeometryImpl(*impl_, id, desc);
 }
 VoidResult LSContext::updateFace(GeometryId id, const FaceDesc& desc) {
-    return updateGeometryImpl(*impl_, id, desc);
+    const GeometryData* before = impl_->findGeometry(id);
+    const FaceDesc* was = before == nullptr ? nullptr : std::get_if<FaceDesc>(&before->shape);
+    const FaceDesc old = was == nullptr ? FaceDesc{} : *was;
+    VoidResult result = updateGeometryImpl(*impl_, id, desc);
+    if (result.ok()) {
+        wallEdges(*impl_, old, id.value, false);
+        wallEdges(*impl_, desc, id.value, true);
+    }
+    return result;
 }
 
 namespace {

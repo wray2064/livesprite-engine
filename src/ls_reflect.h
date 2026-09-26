@@ -176,7 +176,7 @@ template<typename Ar> void mapShape(Ar& ar, PolygonDesc& op)  { F(vertices) F(in
 template<typename Ar> void mapShape(Ar& ar, CurveDesc& op)    { F(segments) F(closed) }
 template<typename Ar> void mapShape(Ar& ar, StrokesDesc& op)  { F(strokes) }
 template<typename Ar> void mapShape(Ar& ar, AreaDesc& op)     { F(contours) }
-template<typename Ar> void mapShape(Ar& ar, FaceDesc& op)     { F(seed) F(area) F(tolerance) F(diagonal) }
+template<typename Ar> void mapShape(Ar& ar, FaceDesc& op)     { F(seed) F(area) F(tolerance) F(diagonal) F(walls) }
 
 
 #undef F

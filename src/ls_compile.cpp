@@ -1113,16 +1113,95 @@ IntervalSet geometryThrough(const CompileEnv& env, const GeometryData& geometry,
                          : env.impl->rasterizeGeometryAlong(geometry, move.map());
 }
 
+IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& move,
+                          const RasterBuffer* current);
+
+// A wall of a face (see FaceDesc::walls) where the move lands it: its shape,
+// moved and rasterized. A face named as a wall is its area, so two faces that
+// close each other in do not go round in a circle; `face` says it was one.
+IntervalSet wallThrough(const CompileEnv& env, const RegionClipTerm& wall, const MarkMove& move,
+                        bool* face) {
+    *face = false;
+    if (const RegionData* region = env.impl->findRegion(wall.region)) {
+        const GeometryData* source = env.impl->findGeometry(region->source);
+        if (source != nullptr && std::holds_alternative<FaceDesc>(source->shape)) {
+            *face = true;
+            return geometryThrough(env, *source, move);
+        }
+        return regionThrough(env, wall.region, move, nullptr);
+    }
+    const GeometryData* shape = env.impl->findGeometry(wall.geometry);
+    if (shape == nullptr) {
+        return {};
+    }
+    *face = std::holds_alternative<FaceDesc>(shape->shape);
+    return geometryThrough(env, *shape, move);
+}
+
 // A face where a move lands it (see FaceDesc): found again, by a flood from
 // its seed moved, over what its layer drew before it, kept within two pixels
 // of its area moved -- so it fills up to the line around it however that line
 // was redrawn, and cannot run past it. A flood that gets further out than that
 // found nothing bounding it on this layer, and then the area moved is the fill.
-IntervalSet faceThrough(const FaceDesc& face, const MarkMove& move, const RasterBuffer* current) {
+IntervalSet faceThrough(const CompileEnv& env, const FaceDesc& face, const MarkMove& move,
+                        const RasterBuffer* current) {
     const IntervalSet area = move.affine() ? geom::rasterizeAreaThrough(face.area, move.matrix)
                                            : geom::rasterizeAreaAlong(face.area, move.map());
-    if ((move.affine() && geom::keepsPixelGrid(move.matrix)) || current == nullptr ||
-        current->empty() || area.empty()) {
+    if ((move.affine() && geom::keepsPixelGrid(move.matrix)) || area.empty()) {
+        return area;
+    }
+    // Named walls: each part of the face found again between them, drawn
+    // through the same move -- up to a line however it was redrawn, taking
+    // what lies within two pixels of its own area. A part whose flood gets
+    // more than two pixels past it, and past every face beside it, has
+    // nothing closing it in on some side, and is its area, less the walls.
+    static thread_local int depth = 0;
+    if (!face.walls.empty() && depth < 8) {
+        ++depth;
+        IntervalSet walls;
+        IntervalSet besides;              // the faces among the walls
+        for (const RegionClipTerm& wall : face.walls) {
+            bool isFace = false;
+            const IntervalSet drawn = wallThrough(env, wall, move, &isFace);
+            walls = geom::unionSets(walls, drawn);
+            if (isFace) {
+                besides = geom::unionSets(besides, drawn);
+            }
+        }
+        --depth;
+        IntervalSet out;
+        for (const IntervalSet& part : geom::connectedComponents(area, false)) {
+            const IntervalSet open = geom::subtractSets(part, walls);
+            if (open.empty()) {
+                continue;
+            }
+            const IntervalSet reach = geom::expand(part, 2.f, true);
+            const IntervalSet limit = geom::subtractSets(geom::expand(part, 3.f, true), walls);
+            const IntervalSet near = geom::expand(geom::unionSets(part, besides), 2.f, true);
+            const Vec2f deep = geom::deepestPoint(open);
+            const Vec2i seed { static_cast<int32_t>(std::floor(deep.x)),
+                               static_cast<int32_t>(std::floor(deep.y)) };
+            // Every piece the walls leave of it, each up to the walls round it;
+            // a piece that gets out past them is outside a line that was redrawn
+            // across it, and goes -- unless it is the heart of the face, which
+            // then has nothing closing it in.
+            IntervalSet found;
+            bool heartOpen = false;
+            for (const IntervalSet& piece : geom::connectedComponents(limit, face.diagonal)) {
+                if (geom::intersectSets(piece, open).empty()) {
+                    continue;
+                }
+                if (geom::subtractSets(piece, near).empty()) {
+                    found = geom::unionSets(found, geom::intersectSets(piece, reach));
+                } else if (geom::contains(piece, seed)) {
+                    heartOpen = true;
+                }
+            }
+            out = geom::unionSets(out, heartOpen || found.empty() ? open : found);
+        }
+        return out;
+    }
+    if (current == nullptr || current->empty()) {
         return area;
     }
     const IntervalSet reach = geom::expand(area, 2.f, true);
@@ -1151,7 +1230,7 @@ IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& mo
     }
     if (const GeometryData* geometry = env.impl->findGeometry(region->source)) {
         const FaceDesc* face = std::get_if<FaceDesc>(&geometry->shape);
-        IntervalSet landed = face != nullptr ? faceThrough(*face, move, current)
+        IntervalSet landed = face != nullptr ? faceThrough(env, *face, move, current)
                                              : geometryThrough(env, *geometry, move);
         if (const GeometryData* erase = env.impl->findGeometry(region->erase)) {
             landed = geom::subtractSets(landed, geometryThrough(env, *erase, move));

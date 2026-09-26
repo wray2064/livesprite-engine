@@ -1125,6 +1125,16 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             if (!unknown.empty()) {
                 impl.unknownFields[id] = unknown;
             }
+            // A face hears about what closes it in changing.
+            if (const FaceDesc* face = std::get_if<FaceDesc>(&geometry.shape)) {
+                for (const RegionClipTerm& wall : face->walls) {
+                    const uint64_t entity = wall.region.valid() ? wall.region.value
+                                                                : wall.geometry.value;
+                    if (entity != 0 && entity != id) {
+                        impl.addDependencyEdge(entity, id);
+                    }
+                }
+            }
             impl.geometry.emplace(id, std::move(geometry));
             stored.geometry.push_back(GeometryId{id});
         }

@@ -1270,6 +1270,139 @@ void testRegionClips(LSContext& ctx) {
     }
 }
 
+// Faces that name their walls are found again between them, drawn through
+// the same move, whatever is drawn first: two faces side by side inside a
+// pencil outline -- laid down before the outline, and each the other's
+// wall -- turned through every angle, meet each other and the line with no
+// gap, and never cross it.
+void testFacesBetweenWalls(LSContext& ctx) {
+    constexpr int kSize = 64;
+    constexpr float kMid = 32.f;
+    const Color orange {230, 140, 60, 255};
+    const Color blue {30, 70, 110, 255};
+    const Color green {40, 160, 90, 255};
+    auto doc = ctx.createDocument({"walls", kSize, kSize});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"walls"});
+
+    StrokesDesc pencil;
+    PenStroke ring;
+    for (int i = 0; i <= 180; ++i) {
+        const float t = static_cast<float>(i % 180) / 180.f * 6.2831853f;
+        const float r = 14.f + 3.f * std::sin(5.f * t);
+        ring.points.push_back({ kMid + r * std::cos(t), kMid + r * std::sin(t) });
+    }
+    pencil.strokes.push_back(ring);
+    const GeometryId line = ctx.createStrokes(doc.value, pencil).value;
+    const RegionId lineRegion = ctx.createRegionFromGeometry(line).value;
+
+    // Inside the line, split down the middle: the left a face, the right one.
+    IntervalSet wall = geom::rasterizeStrokes(pencil);
+    IntervalSet inside;
+    {
+        std::vector<uint8_t> seen(kSize * kSize, 0);
+        for (const Interval& run : wall.intervals) {
+            for (int32_t x = run.x0; x < run.x1; ++x) {
+                seen[run.y * kSize + x] = 1;
+            }
+        }
+        std::vector<Vec2i> stack { { 32, 32 } };
+        while (!stack.empty()) {
+            const Vec2i p = stack.back();
+            stack.pop_back();
+            if (p.x < 0 || p.y < 0 || p.x >= kSize || p.y >= kSize || seen[p.y * kSize + p.x]) {
+                continue;
+            }
+            seen[p.y * kSize + p.x] = 1;
+            inside.intervals.push_back({ p.y, p.x, p.x + 1 });
+            stack.push_back({p.x + 1, p.y}); stack.push_back({p.x - 1, p.y});
+            stack.push_back({p.x, p.y + 1}); stack.push_back({p.x, p.y - 1});
+        }
+        inside = geom::normalize(inside);
+    }
+    const IntervalSet leftHalf = geom::intersectSets(inside, geom::rasterizeRect({{0.f, 0.f}, kMid, 64.f, 0.f}));
+    const IntervalSet rightHalf = geom::subtractSets(inside, leftHalf);
+    FaceDesc left;
+    left.area = geom::traceArea(leftHalf);
+    left.seed = geom::deepestPoint(leftHalf);
+    FaceDesc right;
+    right.area = geom::traceArea(rightHalf);
+    right.seed = geom::deepestPoint(rightHalf);
+    const GeometryId leftShape = ctx.createFace(doc.value, left).value;
+    const GeometryId rightShape = ctx.createFace(doc.value, right).value;
+    left.walls = { { lineRegion, GeometryId{}, ClipOp::Add }, { RegionId{}, rightShape, ClipOp::Add } };
+    right.walls = { { lineRegion, GeometryId{}, ClipOp::Add }, { RegionId{}, leftShape, ClipOp::Add } };
+    LS_REQUIRE(ctx.updateFace(leftShape, left).ok());
+    LS_REQUIRE(ctx.updateFace(rightShape, right).ok());
+
+    // The faces first, the line over them.
+    FillSolidOp leftFill;
+    leftFill.targetRegion = ctx.createRegionFromGeometry(leftShape).value;
+    leftFill.fallbackColor = blue;
+    LS_REQUIRE(ctx.addOperation(layer.value, leftFill).ok());
+    FillSolidOp rightFill;
+    rightFill.targetRegion = ctx.createRegionFromGeometry(rightShape).value;
+    rightFill.fallbackColor = green;
+    LS_REQUIRE(ctx.addOperation(layer.value, rightFill).ok());
+    FillSolidOp drawn;
+    drawn.targetRegion = lineRegion;
+    drawn.fallbackColor = orange;
+    LS_REQUIRE(ctx.addOperation(layer.value, drawn).ok());
+
+    RotateOp rotate;
+    rotate.targetLayer = layer.value;
+    rotate.pivotFallback = { kMid, kMid };
+    const OperationId turn = ctx.addOperation(layer.value, rotate).value;
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = kSize;
+    profile.outputHeight = kSize;
+    profile.palette = PalettePolicy::Unconstrained;
+    int broken = 0;
+    int leaked = 0;
+    int bare = 0;
+    for (int angle = 3; angle < 360; angle += 11) {
+        LS_REQUIRE(ctx.setOperationParameter(turn, "angleDegrees",
+                                             ParameterValue{static_cast<float>(angle)}).ok());
+        auto compiled = ctx.compileSprite(sprite.value, profile);
+        LS_REQUIRE(compiled.ok());
+        std::vector<uint8_t> outside(kSize * kSize, 0);
+        std::vector<Vec2i> stack;
+        for (int i = 0; i < kSize; ++i) {
+            stack.push_back({i, 0}); stack.push_back({i, kSize - 1});
+            stack.push_back({0, i}); stack.push_back({kSize - 1, i});
+        }
+        while (!stack.empty()) {
+            const Vec2i p = stack.back();
+            stack.pop_back();
+            if (p.x < 0 || p.y < 0 || p.x >= kSize || p.y >= kSize) { continue; }
+            const int at = p.y * kSize + p.x;
+            if (outside[at] || readPixel(compiled.value.raster, p.x, p.y) == orange) { continue; }
+            outside[at] = 1;
+            stack.push_back({p.x + 1, p.y}); stack.push_back({p.x - 1, p.y});
+            stack.push_back({p.x, p.y + 1}); stack.push_back({p.x, p.y - 1});
+        }
+        broken += outside[kSize / 2 * kSize + kSize / 2] ? 1 : 0;
+        for (int y = 0; y < kSize; ++y) {
+            for (int x = 0; x < kSize; ++x) {
+                const Color c = readPixel(compiled.value.raster, x, y);
+                if (outside[y * kSize + x]) {
+                    leaked += c.a != 0 ? 1 : 0;
+                } else {
+                    bare += c.a == 0 ? 1 : 0;
+                }
+            }
+        }
+    }
+    LS_CHECK(broken == 0);
+    LS_CHECK(leaked == 0);
+    LS_CHECK(bare == 0);
+    if (broken != 0 || leaked != 0 || bare != 0) {
+        std::printf("    faces between walls: %d angles open, %d pixels outside, %d bare inside\n",
+                    broken, leaked, bare);
+    }
+}
+
 // A shape erased stays a shape: what was rubbed out is kept as the strokes
 // that rubbed it, so the hole goes where the shape goes, and a hole rubbed in
 // a filled shape does not grow an edge of its own.
@@ -1353,6 +1486,7 @@ int main() {
     testErasingAShapeKeepsItAShape(*ctx);
     testDeformsAndPlacementMoveShapes(*ctx);
     testRegionClips(*ctx);
+    testFacesBetweenWalls(*ctx);
 
     return lstest::report("context");
 }

@@ -152,6 +152,12 @@ struct FaceDesc {
     AreaDesc area;
     int32_t  tolerance = 0;         // how far a colour may differ and still be flooded
     bool     diagonal = false;      // diagonal neighbours count as connected
+    // What closes it in -- the lines round it, the areas beside it, on its
+    // layer or another (a term's op is not read). Moved, the face is found
+    // again between them, drawn through the same move: a flood of those
+    // shapes, not of a picture, whatever was drawn first. Empty for a face
+    // found against what its layer drew before it.
+    std::vector<RegionClipTerm> walls;
 };
 
 // ---------------------------------------------------------------------------
