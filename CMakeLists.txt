@@ -21,6 +21,18 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# No incremental linking. An incremental link patches the last executable in
+# place through a table of jump thunks, and after enough rebuilds -- headers
+# changing under the objects, a sibling tree rebuilt -- a thunk can be left
+# pointing at nothing: the program then jumps to address zero before main,
+# with nothing in the output to say why. A full link costs seconds.
+if (MSVC)
+    foreach(flags CMAKE_EXE_LINKER_FLAGS_DEBUG CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
+                  CMAKE_SHARED_LINKER_FLAGS_DEBUG CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO)
+        string(REGEX REPLACE "/INCREMENTAL(:YES)?( |$)" "/INCREMENTAL:NO\\2" ${flags} "${${flags}}")
+    endforeach()
+endif()
+
 set(LS_SOURCES
     src/ls_geometry.cpp
     src/ls_context.cpp
