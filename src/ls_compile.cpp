@@ -1987,6 +1987,40 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         out.opacity = outline->opacity;
         return true;
     }
+    if (const auto* shadow = std::get_if<GenerateDropShadowOp>(&op)) {
+        // A shadow is never part of what the figure is: the pass that works
+        // that out leaves every shadow out.
+        if (env.suppressSpriteOutlines) {
+            return false;
+        }
+        const bool wholeSprite = shadow->targetSprite.valid();
+        const RasterBuffer& source =
+            (wholeSprite && env.spriteSilhouette != nullptr) ? *env.spriteSilhouette : current;
+        const IntervalSet silhouette = geom::maskToIntervals(source, 0.001f);
+        if (silhouette.empty()) {
+            return false;
+        }
+        const int32_t dx = static_cast<int32_t>(std::lround(shadow->offset.x));
+        const int32_t dy = static_cast<int32_t>(std::lround(shadow->offset.y));
+        IntervalSet shifted;
+        shifted.intervals.reserve(silhouette.intervals.size());
+        for (const Interval& run : silhouette.intervals) {
+            shifted.intervals.push_back({ run.y + dy, run.x0 + dx, run.x1 + dx });
+        }
+        shifted = geom::normalize(std::move(shifted));
+        // Only where nothing else is: not over this layer's own pixels, nor --
+        // for the whole figure -- over the figure.
+        IntervalSet occupied = geom::maskToIntervals(current, 0.001f);
+        if (wholeSprite) {
+            occupied = geom::unionSets(occupied, silhouette);
+        }
+        const Color color = env.role(shadow->paletteRole, shadow->fallbackColor);
+        out.coverage = geom::subtractSets(shifted, occupied);
+        out.color = [color](int32_t, int32_t) { return color; };
+        out.blend = shadow->blend;
+        out.opacity = shadow->opacity;
+        return true;
+    }
     if (const auto* outline = std::get_if<GenerateInnerOutlineOp>(&op)) {
         const IntervalSet* coverage = coverageOf(outline->targetRegion);
         if (coverage == nullptr) {
@@ -2544,6 +2578,11 @@ static bool tracesTheWholeSprite(const LSContext::Impl& impl, const LayerData& l
         }
         if (const auto* outline = std::get_if<GenerateSilhouetteOutlineOp>(&data->op)) {
             if (outline->targetSprite.valid()) {
+                return true;
+            }
+        }
+        if (const auto* shadow = std::get_if<GenerateDropShadowOp>(&data->op)) {
+            if (shadow->targetSprite.valid()) {
                 return true;
             }
         }

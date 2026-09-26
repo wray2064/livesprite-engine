@@ -397,6 +397,47 @@ void testReferenceLayers(LSContext& ctx) {
     LS_CHECK(readPixel(again.value.raster, 9, 9).a != 0);
 }
 
+// A drop shadow: the layer's own drawing, moved and in one colour, only where
+// the layer draws nothing -- following the drawing when it changes.
+void testDropShadow(LSContext& ctx) {
+    auto doc = ctx.createDocument({"shadow", 16, 16});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"figure"});
+    auto rect = ctx.createRect(doc.value, {{2.f, 2.f}, 2.f, 2.f, 0.f});
+    auto region = ctx.createRegionFromGeometry(rect.value);
+    FillSolidOp fill;
+    fill.targetRegion = region.value;
+    fill.fallbackColor = {200, 60, 60, 255};
+    LS_CHECK(ctx.addOperation(layer.value, fill).ok());
+    GenerateDropShadowOp shadow;
+    shadow.offset = {2.f, 1.f};
+    shadow.fallbackColor = {0, 0, 0, 255};
+    shadow.opacity = 1.f;
+    auto shadowOp = ctx.addOperation(layer.value, shadow);
+    LS_REQUIRE(shadowOp.ok());
+    LS_CHECK(ctx.getLayerOperations(layer.value).value[1].type == "GenerateDropShadowOp");
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 16;
+    profile.outputHeight = 16;
+    auto compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    const RasterBuffer& r = compiled.value.raster;
+    LS_CHECK(readPixel(r, 2, 2).r == 200);           // the drawing, untouched
+    LS_CHECK(readPixel(r, 3, 3).r == 200);
+    LS_CHECK(readPixel(r, 5, 4).a == 255 && readPixel(r, 5, 4).r == 0);   // the shadow
+    LS_CHECK(readPixel(r, 4, 3).a == 255 && readPixel(r, 4, 3).r == 0);
+    LS_CHECK(readPixel(r, 6, 4).a == 0);
+
+    // Its parameters are reachable like any operation's.
+    LS_CHECK(ctx.setOperationParameter(shadowOp.value, "offset", ParameterValue{Vec2f{-1.f, 0.f}}).ok());
+    auto moved = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(moved.ok());
+    LS_CHECK(readPixel(moved.value.raster, 1, 2).a == 255 && readPixel(moved.value.raster, 1, 2).r == 0);
+    LS_CHECK(readPixel(moved.value.raster, 5, 4).a == 0);
+}
+
 int main() {
     auto ctx = LSContext::create();
     LS_REQUIRE_MAIN(ctx != nullptr);
@@ -410,6 +451,7 @@ int main() {
     testAnchors(*ctx);
     testDependencies(*ctx);
     testReferenceLayers(*ctx);
+    testDropShadow(*ctx);
 
     return lstest::report("context");
 }

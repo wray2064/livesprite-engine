@@ -1,6 +1,6 @@
 # Operations
 
-The 39 operation types, what each one does, and the parameters worth knowing.
+The 40 operation types, what each one does, and the parameters worth knowing.
 Full field lists are in [`ls_operations.h`](../include/livesprite/ls_operations.h);
 at runtime, `describeOperation(id)` reports every drivable parameter and its
 type.
@@ -77,6 +77,7 @@ from straddling two columns. A `strokePattern` thins the mark along its length.
 | `CleanupOutlineOp` | Post-processes an earlier outline: drops isolated pixels, optionally fills notches |
 | `JoinCornersOp` | Bridges the gap between two outlines within a radius |
 | `ResolveOutlineCollisionsOp` | Where outlines overlap, the first one listed owns the pixel |
+| `GenerateDropShadowOp` | What the layer has drawn so far -- or the whole sprite, naming it -- moved by `offset` and drawn in one colour where nothing else is. Never part of the silhouette a whole-sprite outline traces |
 
 The last three name earlier operations by id, so order matters: they act on
 what has already been resolved in the same layer.

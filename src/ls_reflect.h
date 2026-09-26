@@ -72,6 +72,9 @@ template<typename Ar> void mapOp(Ar& ar, GenerateSilhouetteOutlineOp& op) {
     F(targetSprite) F(thickness) F(side) F(corner) F(diagonal) F(paletteRole) F(fallbackColor)
     F(limitBoundary) F(blend) F(opacity)
 }
+template<typename Ar> void mapOp(Ar& ar, GenerateDropShadowOp& op) {
+    F(targetSprite) F(offset) F(paletteRole) F(fallbackColor) F(blend) F(opacity)
+}
 template<typename Ar> void mapOp(Ar& ar, GenerateInnerOutlineOp& op) {
     F(targetRegion) F(thickness) F(corner) F(paletteRole) F(fallbackColor) F(blend) F(opacity)
 }

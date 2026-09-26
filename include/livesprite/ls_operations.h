@@ -218,6 +218,20 @@ struct GenerateSilhouetteOutlineOp {
     float           opacity             = 1.f;
 };
 
+// A drop shadow that follows the artwork: what the layer draws -- or the whole
+// sprite, naming it -- moved by `offset` and drawn in one colour, only where
+// nothing else is. Like the silhouette outline it is resolved from whatever is
+// drawn by the time it runs, so it belongs after the layer's marks; and it is
+// never part of the figure a whole-sprite outline traces.
+struct GenerateDropShadowOp {
+    SpriteId        targetSprite;               // null = this layer
+    Vec2f           offset          = {1.f, 1.f};   // pixels, rounded
+    ColorRole       paletteRole     = kColorRoleNone;
+    Color           fallbackColor   = Color::black();
+    BlendMode       blend           = BlendMode::Normal;
+    float           opacity         = 0.5f;
+};
+
 struct GenerateInnerOutlineOp {
     RegionId        targetRegion;
     float           thickness           = 1.f;
@@ -543,7 +557,9 @@ using Operation = std::variant<
     BoundaryDeformOp,
     PathDeformOp,
     // Plugin
-    PluginOp
+    PluginOp,
+    // Effects added later go last, so no earlier type moves.
+    GenerateDropShadowOp
 >;
 
 // The same list again, in a form code can walk.
@@ -553,7 +569,7 @@ using Operation = std::variant<
 // rather than repeating the roll call. The static_assert below makes the two
 // lists a compile error if they ever disagree, so the duplication is checked
 // rather than trusted.
-#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp)
+#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp) X(GenerateDropShadowOp)
 
 #define LS_OP_COUNT_ONE(T) + 1
 static_assert(std::variant_size_v<Operation> == (0 LS_OPERATION_TYPES(LS_OP_COUNT_ONE)),
