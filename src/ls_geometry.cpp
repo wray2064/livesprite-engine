@@ -931,6 +931,464 @@ IntervalSet mapAcrossGrid(const IntervalSet& set, const Mat3f& matrix) {
 }
 
 // ---------------------------------------------------------------------------
+// Freehand marks, areas and fills
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The pixels of a straight run from one pixel to another, both included, in
+// order -- the same Bresenham every pixel tool draws.
+void walkBetween(Vec2i from, Vec2i to, std::vector<Vec2i>& out) {
+    int32_t x0 = from.x;
+    int32_t y0 = from.y;
+    const int32_t dx =  std::abs(to.x - x0);
+    const int32_t dy = -std::abs(to.y - y0);
+    const int32_t sx = x0 < to.x ? 1 : -1;
+    const int32_t sy = y0 < to.y ? 1 : -1;
+    int32_t err = dx + dy;
+    while (true) {
+        if (out.empty() || out.back().x != x0 || out.back().y != y0) {
+            out.push_back({ x0, y0 });
+        }
+        if (x0 == to.x && y0 == to.y) {
+            break;
+        }
+        const int32_t e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+Vec2i pixelOf(Vec2f p) {
+    return { static_cast<int32_t>(std::floor(p.x)), static_cast<int32_t>(std::floor(p.y)) };
+}
+
+// Drops the corner of every L in a walk: where the pixels either side of one
+// touch diagonally, the walk steps straight between them.
+std::vector<Vec2i> withoutCorners(const std::vector<Vec2i>& walk) {
+    std::vector<Vec2i> kept;
+    kept.reserve(walk.size());
+    for (const Vec2i& p : walk) {
+        if (kept.size() >= 2) {
+            const Vec2i& a = kept[kept.size() - 2];
+            const Vec2i& b = kept.back();
+            const bool corner = std::abs(p.x - a.x) == 1 && std::abs(p.y - a.y) == 1 &&
+                                (b.x == a.x || b.y == a.y) && (b.x == p.x || b.y == p.y);
+            if (corner) {
+                kept.pop_back();
+            }
+        }
+        kept.push_back(p);
+    }
+    return kept;
+}
+
+// A footprint for a brush of `size` stamped through a move that scales by
+// `scale`: the stamp redrawn at its new size, still level with the grid --
+// a pixel brush does not turn with what it drew.
+int scaledSize(float size, float scale) {
+    return std::max(1, static_cast<int>(std::lround(size * scale)));
+}
+
+void stamp(PixelSet& into, Vec2i at, const std::vector<Vec2i>& footprint) {
+    if (footprint.empty()) {
+        into.insert(pixelKey(at.x, at.y));
+        return;
+    }
+    for (const Vec2i& offset : footprint) {
+        into.insert(pixelKey(at.x + offset.x, at.y + offset.y));
+    }
+}
+
+// One stroke's pixels. As drawn (`matrix` null) the points are the pixels
+// laid down, joined where the pointer jumped. Moved, the path is simplified
+// back to the lines the hand drew -- the stair of pixels a straight line
+// leaves is not the line -- moved, and walked again where it lands.
+PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
+    PixelSet pixels;
+    if (stroke.points.empty()) {
+        return pixels;
+    }
+    const float scale = matrix == nullptr ? 1.f : std::sqrt(std::fabs(matrix->determinant()));
+    const auto sizeAt = [&](size_t i) {
+        const float size = i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
+        return scaledSize(size, scale);
+    };
+    std::map<int, std::vector<Vec2i>> footprints;
+    const auto footprintOf = [&](int size) -> const std::vector<Vec2i>& {
+        auto found = footprints.find(size);
+        if (found == footprints.end()) {
+            found = footprints.emplace(size, size <= 1 ? std::vector<Vec2i>{}
+                                                       : brushFootprint(size, stroke.round)).first;
+        }
+        return found->second;
+    };
+
+    if (stroke.kind == PenKind::Dots) {
+        for (size_t i = 0; i < stroke.points.size(); ++i) {
+            const Vec2f at = matrix == nullptr ? stroke.points[i]
+                                               : matrix->transformPoint(stroke.points[i]);
+            stamp(pixels, pixelOf(at), footprintOf(sizeAt(i)));
+        }
+        return pixels;
+    }
+
+    // The path, and which point each of its corners came from (for the size).
+    std::vector<Vec2f> path = stroke.points;
+    std::vector<size_t> from(path.size());
+    for (size_t i = 0; i < from.size(); ++i) {
+        from[i] = i;
+    }
+    if (matrix != nullptr && path.size() > 2 && stroke.sizes.empty()) {
+        SimplifyParams params;
+        params.epsilon = 0.75f;
+        params.preserveCorners = false;
+        path = simplifyPath(path, params);
+        from.assign(path.size(), 0);
+    }
+    if (matrix != nullptr) {
+        for (Vec2f& p : path) {
+            p = matrix->transformPoint(p);
+        }
+    }
+    std::vector<Vec2i> walk;
+    std::vector<size_t> walkFrom;
+    walk.push_back(pixelOf(path.front()));
+    walkFrom.push_back(from.front());
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const size_t before = walk.size();
+        std::vector<Vec2i> run;
+        walkBetween(pixelOf(path[i]), pixelOf(path[i + 1]), run);
+        for (size_t r = 1; r < run.size(); ++r) {
+            walk.push_back(run[r]);
+            walkFrom.push_back(from[i]);
+        }
+        (void)before;
+    }
+    const bool oneWide = stroke.sizes.empty() && sizeAt(0) <= 1;
+    if (matrix != nullptr && oneWide && stroke.pixelPerfect) {
+        walk = withoutCorners(walk);
+        walkFrom.assign(walk.size(), 0);
+    }
+    for (size_t i = 0; i < walk.size(); ++i) {
+        stamp(pixels, walk[i], footprintOf(sizeAt(walkFrom[i])));
+    }
+    return pixels;
+}
+
+IntervalSet strokesPixels(const StrokesDesc& desc, const Mat3f* matrix) {
+    IntervalSet coverage;
+    for (const PenStroke& stroke : desc.strokes) {
+        const IntervalSet mark = fromPixelSet(strokePixels(stroke, matrix));
+        coverage = stroke.erase ? subtractSets(coverage, mark) : unionSets(coverage, mark);
+    }
+    return coverage;
+}
+
+// Even-odd over every contour at once, a pixel inside when its centre is.
+IntervalSet fillContours(const std::vector<std::vector<Vec2f>>& contours) {
+    IntervalSet set;
+    float minY = 0.f, maxY = 0.f;
+    bool any = false;
+    for (const auto& contour : contours) {
+        for (const Vec2f& p : contour) {
+            minY = any ? std::min(minY, p.y) : p.y;
+            maxY = any ? std::max(maxY, p.y) : p.y;
+            any = true;
+        }
+    }
+    if (!any) {
+        return set;
+    }
+    std::vector<float> crossings;
+    for (int32_t y = static_cast<int32_t>(std::floor(minY)); y < static_cast<int32_t>(std::ceil(maxY)); ++y) {
+        const float sampleY = static_cast<float>(y) + 0.5f;
+        crossings.clear();
+        for (const auto& contour : contours) {
+            for (size_t i = 0; i < contour.size(); ++i) {
+                const Vec2f& p = contour[i];
+                const Vec2f& q = contour[(i + 1) % contour.size()];
+                if (p.y == q.y) {
+                    continue;
+                }
+                const float lo = std::min(p.y, q.y);
+                const float hi = std::max(p.y, q.y);
+                if (sampleY < lo || sampleY >= hi) {
+                    continue;
+                }
+                crossings.push_back(p.x + (sampleY - p.y) / (q.y - p.y) * (q.x - p.x));
+            }
+        }
+        std::sort(crossings.begin(), crossings.end());
+        for (size_t i = 0; i + 1 < crossings.size(); i += 2) {
+            const int32_t x0 = static_cast<int32_t>(std::ceil(crossings[i] - 0.5f));
+            const int32_t x1 = static_cast<int32_t>(std::ceil(crossings[i + 1] - 0.5f));
+            if (x1 > x0) {
+                set.intervals.push_back({ y, x0, x1 });
+            }
+        }
+    }
+    return normalize(std::move(set));
+}
+
+bool coloursWithin(Color a, Color b, int32_t tolerance) {
+    if (a.a == 0 && b.a == 0) {
+        return true;
+    }
+    if (tolerance <= 0) {
+        return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    }
+    return std::abs(static_cast<int>(a.r) - b.r) <= tolerance &&
+           std::abs(static_cast<int>(a.g) - b.g) <= tolerance &&
+           std::abs(static_cast<int>(a.b) - b.b) <= tolerance &&
+           std::abs(static_cast<int>(a.a) - b.a) <= tolerance;
+}
+
+Color rasterAt(const RasterBuffer& raster, int32_t x, int32_t y) {
+    const uint8_t* p = raster.row(static_cast<uint32_t>(y)) + static_cast<size_t>(x) * 4u;
+    return { p[0], p[1], p[2], p[3] };
+}
+
+} // namespace
+
+std::vector<Vec2i> brushFootprint(int size, bool round) {
+    std::vector<Vec2i> out;
+    size = std::max(1, std::min(size, 256));
+    const int before = (size - 1) / 2;
+    const float centre = static_cast<float>(size) * 0.5f;
+    const float radius = centre;
+    out.reserve(static_cast<size_t>(size) * static_cast<size_t>(size));
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            if (round && size >= 3) {
+                // Inside the circle the stamp is inscribed in, with a touch of
+                // slack so a size-3 brush is a plus, not a dot.
+                const float dx = static_cast<float>(x) + 0.5f - centre;
+                const float dy = static_cast<float>(y) + 0.5f - centre;
+                if (dx * dx + dy * dy > radius * radius * 0.8f) {
+                    continue;
+                }
+            }
+            out.push_back({ x - before, y - before });
+        }
+    }
+    return out;
+}
+
+IntervalSet rasterizeStrokes(const StrokesDesc& desc) {
+    return strokesPixels(desc, nullptr);
+}
+
+IntervalSet rasterizeStrokesThrough(const StrokesDesc& desc, const Mat3f& matrix) {
+    if (keepsPixelGrid(matrix)) {
+        return mapAcrossGrid(strokesPixels(desc, nullptr), matrix);
+    }
+    return strokesPixels(desc, &matrix);
+}
+
+IntervalSet rasterizeAreaDesc(const AreaDesc& desc) {
+    return fillContours(desc.contours);
+}
+
+IntervalSet rasterizeAreaThrough(const AreaDesc& desc, const Mat3f& matrix) {
+    if (keepsPixelGrid(matrix)) {
+        return mapAcrossGrid(fillContours(desc.contours), matrix);
+    }
+    std::vector<std::vector<Vec2f>> moved = desc.contours;
+    for (auto& contour : moved) {
+        for (Vec2f& p : contour) {
+            p = matrix.transformPoint(p);
+        }
+    }
+    return fillContours(moved);
+}
+
+AreaDesc traceArea(const IntervalSet& set) {
+    AreaDesc area;
+    for (const ContourDesc& contour : traceContours(set, true)) {
+        // The tracer walks every pixel edge; a straight run needs its ends only.
+        std::vector<Vec2f> corners;
+        const size_t n = contour.points.size();
+        for (size_t i = 0; i < n; ++i) {
+            const Vec2f& before = contour.points[(i + n - 1) % n];
+            const Vec2f& here = contour.points[i];
+            const Vec2f& after = contour.points[(i + 1) % n];
+            const float cross = (here.x - before.x) * (after.y - here.y) -
+                                (here.y - before.y) * (after.x - here.x);
+            if (cross != 0.f) {
+                corners.push_back(here);
+            }
+        }
+        if (corners.size() >= 3) {
+            area.contours.push_back(std::move(corners));
+        }
+    }
+    return area;
+}
+
+Vec2f deepestPoint(const IntervalSet& set) {
+    // How far each pixel is from the outside, in steps any way round (a
+    // two-pass distance over the set's box); the furthest is the deepest.
+    const Rect2i box = bounds(set);
+    if (box.empty()) {
+        return { 0.f, 0.f };
+    }
+    const int32_t w = box.width() + 2;
+    const int32_t h = box.height() + 2;
+    std::vector<int32_t> depth(static_cast<size_t>(w) * h, 0);
+    for (const Interval& interval : set.intervals) {
+        for (int32_t x = interval.x0; x < interval.x1; ++x) {
+            depth[static_cast<size_t>(interval.y - box.min.y + 1) * w + (x - box.min.x + 1)] = 1 << 20;
+        }
+    }
+    const auto at = [&](int32_t x, int32_t y) -> int32_t& { return depth[static_cast<size_t>(y) * w + x]; };
+    for (int32_t y = 1; y < h - 1; ++y) {
+        for (int32_t x = 1; x < w - 1; ++x) {
+            if (at(x, y) != 0) {
+                at(x, y) = std::min({ at(x, y), at(x - 1, y) + 1, at(x, y - 1) + 1,
+                                      at(x - 1, y - 1) + 1, at(x + 1, y - 1) + 1 });
+            }
+        }
+    }
+    // Of the deepest, the one nearest the middle of the box: a bar's seed is
+    // the middle of the bar, not whichever end of its spine came first.
+    int32_t best = -1;
+    float bestOffCentre = 0.f;
+    const float middleX = (static_cast<float>(box.min.x) + static_cast<float>(box.max.x)) * 0.5f;
+    const float middleY = (static_cast<float>(box.min.y) + static_cast<float>(box.max.y)) * 0.5f;
+    Vec2f deepest { 0.f, 0.f };
+    for (int32_t y = h - 2; y >= 1; --y) {
+        for (int32_t x = w - 2; x >= 1; --x) {
+            if (at(x, y) != 0) {
+                at(x, y) = std::min({ at(x, y), at(x + 1, y) + 1, at(x, y + 1) + 1,
+                                      at(x + 1, y + 1) + 1, at(x - 1, y + 1) + 1 });
+                const Vec2f here { static_cast<float>(x - 1 + box.min.x) + 0.5f,
+                                   static_cast<float>(y - 1 + box.min.y) + 0.5f };
+                const float offCentre = std::fabs(here.x - middleX) + std::fabs(here.y - middleY);
+                if (at(x, y) > best || (at(x, y) == best && offCentre < bestOffCentre)) {
+                    best = at(x, y);
+                    bestOffCentre = offCentre;
+                    deepest = here;
+                }
+            }
+        }
+    }
+    return deepest;
+}
+
+bool cutStrokes(StrokesDesc& desc, const IntervalSet& erased) {
+    const PixelSet gone = toPixelSet(erased);
+    const auto isGone = [&gone](Vec2i p) { return gone.count(pixelKey(p.x, p.y)) != 0; };
+    bool wideTouched = false;
+    std::vector<PenStroke> kept;
+    kept.reserve(desc.strokes.size());
+    for (const PenStroke& stroke : desc.strokes) {
+        const bool oneWide = stroke.sizes.empty() && stroke.size <= 1.f;
+        if (stroke.erase || !oneWide) {
+            if (!stroke.erase && !wideTouched) {
+                const PixelSet drawn = strokePixels(stroke, nullptr);
+                for (uint64_t key : drawn) {
+                    if (gone.count(key) != 0) {
+                        wideTouched = true;
+                        break;
+                    }
+                }
+            }
+            kept.push_back(stroke);
+            continue;
+        }
+        if (stroke.kind == PenKind::Dots) {
+            PenStroke left = stroke;
+            left.points.clear();
+            for (const Vec2f& p : stroke.points) {
+                if (!isGone(pixelOf(p))) {
+                    left.points.push_back(p);
+                }
+            }
+            if (!left.points.empty()) {
+                kept.push_back(std::move(left));
+            }
+            continue;
+        }
+        // A line: its pixels in order, then the runs the eraser left.
+        std::vector<Vec2i> walk;
+        walk.push_back(pixelOf(stroke.points.front()));
+        for (size_t i = 0; i + 1 < stroke.points.size(); ++i) {
+            walkBetween(pixelOf(stroke.points[i]), pixelOf(stroke.points[i + 1]), walk);
+        }
+        bool touched = false;
+        for (const Vec2i& p : walk) {
+            touched = touched || isGone(p);
+        }
+        if (!touched) {
+            kept.push_back(stroke);
+            continue;
+        }
+        PenStroke piece = stroke;
+        piece.points.clear();
+        for (const Vec2i& p : walk) {
+            if (isGone(p)) {
+                if (!piece.points.empty()) {
+                    kept.push_back(piece);
+                    piece.points.clear();
+                }
+                continue;
+            }
+            piece.points.push_back({ static_cast<float>(p.x) + 0.5f, static_cast<float>(p.y) + 0.5f });
+        }
+        if (!piece.points.empty()) {
+            kept.push_back(std::move(piece));
+        }
+    }
+    desc.strokes = std::move(kept);
+    return wideTouched;
+}
+
+IntervalSet floodRaster(const RasterBuffer& raster, Vec2i seed, int32_t tolerance, bool diagonal,
+                        const IntervalSet* within) {
+    const int32_t width = static_cast<int32_t>(raster.width);
+    const int32_t height = static_cast<int32_t>(raster.height);
+    if (seed.x < 0 || seed.y < 0 || seed.x >= width || seed.y >= height ||
+        raster.pixels.size() < static_cast<size_t>(raster.stride) * raster.height) {
+        return {};
+    }
+    const PixelSet allowed = within == nullptr ? PixelSet{} : toPixelSet(*within);
+    const auto inside = [&](int32_t x, int32_t y) {
+        return x >= 0 && y >= 0 && x < width && y < height &&
+               (within == nullptr || allowed.count(pixelKey(x, y)) != 0);
+    };
+    if (!inside(seed.x, seed.y)) {
+        return {};
+    }
+    const Color wanted = rasterAt(raster, seed.x, seed.y);
+    std::vector<uint8_t> seen(static_cast<size_t>(width) * height, 0);
+    std::deque<Vec2i> queue { seed };
+    seen[static_cast<size_t>(seed.y) * width + seed.x] = 1;
+    PixelSet filled;
+    static const Vec2i kSteps[8] = { {1,0}, {-1,0}, {0,1}, {0,-1}, {1,1}, {1,-1}, {-1,1}, {-1,-1} };
+    while (!queue.empty()) {
+        const Vec2i at = queue.front();
+        queue.pop_front();
+        if (!coloursWithin(rasterAt(raster, at.x, at.y), wanted, tolerance)) {
+            continue;
+        }
+        filled.insert(pixelKey(at.x, at.y));
+        for (int i = 0; i < (diagonal ? 8 : 4); ++i) {
+            const Vec2i next { at.x + kSteps[i].x, at.y + kSteps[i].y };
+            if (!inside(next.x, next.y)) {
+                continue;
+            }
+            uint8_t& visited = seen[static_cast<size_t>(next.y) * width + next.x];
+            if (visited == 0) {
+                visited = 1;
+                queue.push_back(next);
+            }
+        }
+    }
+    return fromPixelSet(filled);
+}
+
+// ---------------------------------------------------------------------------
 // Contours
 // ---------------------------------------------------------------------------
 

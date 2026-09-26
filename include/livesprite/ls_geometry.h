@@ -68,6 +68,58 @@ struct CurveDesc {
 };
 
 // ---------------------------------------------------------------------------
+// Freehand marks, areas and fills -- as shapes.
+//
+// What a pencil, a spray, an eraser and a paint bucket make, kept as what the
+// hand did rather than the pixels it left. Where they were made they draw
+// exactly the pixels that were drawn; moved -- turned, scaled, mirrored --
+// they are drawn again where they land, so a turned pencil line is a pencil
+// line at the new angle rather than a picture of one, turned.
+// ---------------------------------------------------------------------------
+
+enum class PenKind : uint8_t {
+    Line,   // the points walked in order, one pixel wide or with the brush stamped along
+    Dots,   // each point on its own, unjoined: a spray
+};
+
+// One stroke of a brush: the path the pointer took, and the brush.
+struct PenStroke {
+    std::vector<Vec2f> points;      // pixel centres, in the order drawn
+    std::vector<float> sizes;       // the brush size at each point, when a pen's
+                                    // pressure set it; empty for a steady brush
+    float   size = 1.f;             // pixels across
+    bool    round = false;          // round from 3 across up, square otherwise
+    bool    pixelPerfect = true;    // walked again, a one-pixel line drops its L corners
+    bool    erase = false;          // takes its pixels from the strokes before it
+    PenKind kind = PenKind::Line;
+};
+
+// Freehand marks in the order they were made.
+struct StrokesDesc {
+    std::vector<PenStroke> strokes;
+};
+
+// An area, exactly: the edges of its pixels as closed contours, filled
+// even-odd, so a hole is a contour too. What a set of pixels becomes when it
+// is to be a shape -- it draws those pixels where it is, and moves as one.
+struct AreaDesc {
+    std::vector<std::vector<Vec2f>> contours;
+};
+
+// A fill that finds its own edge -- what a paint bucket makes. Where it was
+// made it is exactly `area`, the pixels its flood found. Moved, it is found
+// again: a flood from the seed where it lands, over what its layer has drawn
+// before it, kept within two pixels of the area moved -- so it meets the line
+// that bounds it however that line was redrawn, with no gap and no leak. If
+// nothing on the layer bounds it there, the area moved is the fill.
+struct FaceDesc {
+    Vec2f    seed;                  // deep inside, in the layer's own space
+    AreaDesc area;
+    int32_t  tolerance = 0;         // how far a colour may differ and still be flooded
+    bool     diagonal = false;      // diagonal neighbours count as connected
+};
+
+// ---------------------------------------------------------------------------
 // Authored pixel input — the substrate behind hand-drawn strokes and the
 // bucket-fill workflow. Same-color closed loops seal their interior.
 // ---------------------------------------------------------------------------
@@ -219,6 +271,31 @@ IntervalSet rasterizePixelWalk(const std::vector<Vec2f>& points, bool closed);
 // (the polygon rule). By spans: a pixel any part of whose row centre line is
 // inside (the ellipse rule, which keeps small round shapes round).
 IntervalSet rasterizeArea(const std::vector<Vec2f>& outline, bool bySpans = false);
+
+// --- Freehand, areas, fills ---------------------------------------------------
+// The pixels a brush stamp covers, as offsets from the pixel it is centred on.
+// Odd sizes centre on the pixel; even ones hang right and down from it, so the
+// pointer's pixel is inside the stamp at every size.
+std::vector<Vec2i> brushFootprint(int size, bool round);
+IntervalSet rasterizeStrokes(const StrokesDesc& desc);
+IntervalSet rasterizeStrokesThrough(const StrokesDesc& desc, const Mat3f& matrix);
+IntervalSet rasterizeAreaDesc(const AreaDesc& desc);
+IntervalSet rasterizeAreaThrough(const AreaDesc& desc, const Mat3f& matrix);
+// The contours of a set of pixels, along their edges.
+AreaDesc traceArea(const IntervalSet& set);
+// The centre of the pixel furthest inside a set: a seed that stays inside
+// whatever the set is turned or scaled to.
+Vec2f deepestPoint(const IntervalSet& set);
+// Takes `erased` out of the strokes: a one-pixel line loses exactly those
+// pixels and is split where it lost them, and a spray loses those dots, so
+// nothing is left to come back when they are drawn somewhere else. A wider
+// stroke cannot lose part of its width that way; true when one lay under the
+// pixels, for the caller to add an erasing stroke over it.
+bool cutStrokes(StrokesDesc& desc, const IntervalSet& erased);
+// A flood over a picture from `seed`: the connected pixels whose colour is
+// within `tolerance` of the seed's. Kept inside `within` when it is given.
+IntervalSet floodRaster(const RasterBuffer& raster, Vec2i seed, int32_t tolerance, bool diagonal,
+                        const IntervalSet* within = nullptr);
 
 // --- Contours -------------------------------------------------------------
 std::vector<Vec2f> flattenCurve(const CurveDesc& desc, float tolerance = 0.25f);

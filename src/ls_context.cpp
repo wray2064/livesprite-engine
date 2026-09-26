@@ -708,7 +708,10 @@ IntervalSet LSContext::Impl::rasterizeGeometry(const GeometryData& data) const {
         else if constexpr (std::is_same_v<Shape, EllipseDesc>)  return geom::rasterizeEllipse(shape);
         else if constexpr (std::is_same_v<Shape, CircleDesc>)   return geom::rasterizeCircle(shape);
         else if constexpr (std::is_same_v<Shape, PolygonDesc>)  return geom::rasterizePolygon(shape);
-        else                                                    return geom::rasterizeCurve(shape);
+        else if constexpr (std::is_same_v<Shape, CurveDesc>)    return geom::rasterizeCurve(shape);
+        else if constexpr (std::is_same_v<Shape, StrokesDesc>)  return geom::rasterizeStrokes(shape);
+        else if constexpr (std::is_same_v<Shape, AreaDesc>)     return geom::rasterizeAreaDesc(shape);
+        else                                                    return geom::rasterizeAreaDesc(shape.area);
     }, data.shape);
 }
 
@@ -806,6 +809,14 @@ IntervalSet LSContext::Impl::rasterizeGeometryThrough(const GeometryData& data,
                 area = geom::unionSets(area, geom::rasterizePixelWalk(points, true));
             }
             return area;
+        } else if constexpr (std::is_same_v<Shape, StrokesDesc>) {
+            return geom::rasterizeStrokesThrough(shape, matrix);
+        } else if constexpr (std::is_same_v<Shape, AreaDesc>) {
+            return geom::rasterizeAreaThrough(shape, matrix);
+        } else if constexpr (std::is_same_v<Shape, FaceDesc>) {
+            // Where the face lands with nothing to bound it: its area, moved.
+            // The compile finds it again against its layer (see faceThrough).
+            return geom::rasterizeAreaThrough(shape.area, matrix);
         } else {
             const std::vector<Vec2f> path = moved(geom::flattenCurve(shape));
             if (path.size() < 2) {
@@ -856,8 +867,18 @@ std::vector<Vec2f> LSContext::Impl::geometryPath(const GeometryData& data) const
                                    shape.center.y + math::sinf(t) * shape.radius });
             }
             return points;
-        } else {
+        } else if constexpr (std::is_same_v<Shape, CurveDesc>) {
             return geom::flattenCurve(shape);
+        } else if constexpr (std::is_same_v<Shape, StrokesDesc>) {
+            std::vector<Vec2f> points;
+            for (const PenStroke& stroke : shape.strokes) {
+                points.insert(points.end(), stroke.points.begin(), stroke.points.end());
+            }
+            return points;
+        } else if constexpr (std::is_same_v<Shape, AreaDesc>) {
+            return shape.contours.empty() ? std::vector<Vec2f>{} : shape.contours.front();
+        } else {
+            return shape.area.contours.empty() ? std::vector<Vec2f>{} : shape.area.contours.front();
         }
     }, data.shape);
 }
@@ -1725,6 +1746,15 @@ Result<GeometryId> LSContext::createCircle(DocumentId doc, const CircleDesc& des
     }
     return createGeometryImpl(*impl_, doc, desc);
 }
+Result<GeometryId> LSContext::createStrokes(DocumentId doc, const StrokesDesc& desc) {
+    return createGeometryImpl(*impl_, doc, desc);
+}
+Result<GeometryId> LSContext::createArea(DocumentId doc, const AreaDesc& desc) {
+    return createGeometryImpl(*impl_, doc, desc);
+}
+Result<GeometryId> LSContext::createFace(DocumentId doc, const FaceDesc& desc) {
+    return createGeometryImpl(*impl_, doc, desc);
+}
 Result<GeometryId> LSContext::createPolygon(DocumentId doc, const PolygonDesc& desc) {
     if (desc.vertices.size() < 3) {
         return Result<GeometryId>::err(LSError::InvalidParameter);
@@ -1794,6 +1824,15 @@ VoidResult LSContext::updateEllipse(GeometryId id, const EllipseDesc& desc) {
 VoidResult LSContext::updatePolygon(GeometryId id, const PolygonDesc& desc) {
     return updateGeometryImpl(*impl_, id, desc);
 }
+VoidResult LSContext::updateStrokes(GeometryId id, const StrokesDesc& desc) {
+    return updateGeometryImpl(*impl_, id, desc);
+}
+VoidResult LSContext::updateArea(GeometryId id, const AreaDesc& desc) {
+    return updateGeometryImpl(*impl_, id, desc);
+}
+VoidResult LSContext::updateFace(GeometryId id, const FaceDesc& desc) {
+    return updateGeometryImpl(*impl_, id, desc);
+}
 
 namespace {
 template<typename Desc>
@@ -1824,6 +1863,15 @@ Result<PolygonDesc> LSContext::getPolygon(GeometryId id) const {
 }
 Result<CurveDesc> LSContext::getCurve(GeometryId id) const {
     return readGeometryImpl<CurveDesc>(*impl_, id);
+}
+Result<StrokesDesc> LSContext::getStrokes(GeometryId id) const {
+    return readGeometryImpl<StrokesDesc>(*impl_, id);
+}
+Result<AreaDesc> LSContext::getArea(GeometryId id) const {
+    return readGeometryImpl<AreaDesc>(*impl_, id);
+}
+Result<FaceDesc> LSContext::getFace(GeometryId id) const {
+    return readGeometryImpl<FaceDesc>(*impl_, id);
 }
 
 Result<GeometryBounds> LSContext::getGeometryBounds(GeometryId id) const {

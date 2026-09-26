@@ -86,7 +86,10 @@ using GeometryShape = std::variant<
     EllipseDesc,
     CircleDesc,
     PolygonDesc,
-    CurveDesc
+    CurveDesc,
+    StrokesDesc,
+    AreaDesc,
+    FaceDesc
 >;
 
 struct GeometryData {

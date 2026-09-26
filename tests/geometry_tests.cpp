@@ -316,7 +316,94 @@ static void testPolygonIncludesItsEdges() {
              ls::geom::contains(tri, {7, 7}));
 }
 
+// Freehand marks draw exactly the pixels drawn: a one-pixel line is its
+// points; a brush is its footprint stamped along them; dots are the points;
+// an erasing stroke takes from what came before it and nothing after.
+void testStrokesDrawWhatWasDrawn() {
+    const auto centre = [](int32_t x, int32_t y) {
+        return Vec2f{ static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f };
+    };
+    StrokesDesc desc;
+    PenStroke line;
+    line.points = { centre(2, 2), centre(3, 2), centre(4, 3), centre(5, 3) };
+    desc.strokes.push_back(line);
+    IntervalSet drawn = geom::rasterizeStrokes(desc);
+    LS_CHECK(geom::pixelCount(drawn) == 4);
+    LS_CHECK(geom::contains(drawn, {4, 3}) && !geom::contains(drawn, {4, 2}));
+
+    // Where the pointer jumped, the gap is joined.
+    PenStroke jump;
+    jump.points = { centre(0, 10), centre(6, 10) };
+    desc.strokes = { jump };
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 7);
+
+    // A brush: 3 square is nine to a stamp, 3 round is a plus; 2 hangs right
+    // and down from the pixel.
+    LS_CHECK(geom::brushFootprint(3, false).size() == 9);
+    LS_CHECK(geom::brushFootprint(3, true).size() == 5);
+    const std::vector<Vec2i> two = geom::brushFootprint(2, false);
+    LS_CHECK(two.size() == 4 && two.front().x == 0 && two.front().y == 0);
+
+    // Dots, and an erase that takes one of them and leaves a later one.
+    PenStroke dots;
+    dots.kind = PenKind::Dots;
+    dots.points = { centre(1, 1), centre(8, 8), centre(3, 7) };
+    PenStroke erase;
+    erase.erase = true;
+    erase.points = { centre(8, 8) };
+    PenStroke after;
+    after.points = { centre(8, 8) };
+    desc.strokes = { dots, erase };
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 2);
+    desc.strokes = { dots, erase, after };
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 3);
+}
+
+// Erasing a thin line cuts it: the pixels go from the path itself, so there
+// is nothing left of them to reappear when the line is drawn at an angle.
+void testCuttingALine() {
+    StrokesDesc desc;
+    PenStroke line;
+    for (int x = 0; x < 12; ++x) {
+        line.points.push_back({ static_cast<float>(x) + 0.5f, 4.5f });
+    }
+    desc.strokes.push_back(line);
+    LS_CHECK(!geom::cutStrokes(desc, rect(5, 4, 7, 5)));
+    LS_CHECK(desc.strokes.size() == 2);
+    const IntervalSet left = geom::rasterizeStrokes(desc);
+    LS_CHECK(geom::pixelCount(left) == 10);
+    LS_CHECK(!geom::contains(left, {5, 4}) && !geom::contains(left, {6, 4}));
+
+    // Turned, the two pieces stay two pieces.
+    const Mat3f turn = Mat3f::aroundPivot(Mat3f::rotation(33.f), {6.f, 4.5f});
+    LS_CHECK(geom::connectedComponents(geom::rasterizeStrokesThrough(desc, turn), true).size() == 2);
+
+    // A wide stroke cannot lose part of its width that way: it says so.
+    PenStroke wide;
+    wide.size = 3.f;
+    wide.points = { {20.5f, 20.5f}, {26.5f, 20.5f} };
+    desc.strokes = { wide };
+    LS_CHECK(geom::cutStrokes(desc, rect(22, 20, 23, 21)));
+}
+
+// An area traced from pixels draws those pixels exactly, holes and all.
+void testAreasTraceExactly() {
+    IntervalSet ring = geom::subtractSets(rect(2, 2, 12, 10), rect(5, 4, 8, 7));
+    ring = geom::unionSets(ring, rect(20, 3, 21, 4));
+    const AreaDesc area = geom::traceArea(ring);
+    LS_CHECK(area.contours.size() == 3);
+    const IntervalSet back = geom::rasterizeAreaDesc(area);
+    LS_CHECK(geom::pixelCount(geom::xorSets(back, ring)) == 0);
+
+    // Deep inside: the middle of a bar, not its edge.
+    const Vec2f deep = geom::deepestPoint(rect(0, 0, 9, 5));
+    LS_CHECK(deep.x == 4.5f && deep.y == 2.5f);
+}
+
 int main() {
+    testStrokesDrawWhatWasDrawn();
+    testCuttingALine();
+    testAreasTraceExactly();
     testPolygonIncludesItsEdges();
     testNormalize();
     testBooleanOps();

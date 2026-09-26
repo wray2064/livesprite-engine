@@ -515,12 +515,20 @@ public:
     Result<GeometryId>  createCircle(DocumentId doc, const CircleDesc& desc);
     Result<GeometryId>  createPolygon(DocumentId doc, const PolygonDesc& desc);
     Result<GeometryId>  createCurve(DocumentId doc, const CurveDesc& desc);
+    // Freehand marks, exact areas and fills that find their edge: see
+    // ls_geometry.h. A region made from one is a shape like any other.
+    Result<GeometryId>  createStrokes(DocumentId doc, const StrokesDesc& desc);
+    Result<GeometryId>  createArea(DocumentId doc, const AreaDesc& desc);
+    Result<GeometryId>  createFace(DocumentId doc, const FaceDesc& desc);
     VoidResult          deleteGeometry(GeometryId id);
     VoidResult          updatePolyline(GeometryId id, const PolylineDesc& desc);
     VoidResult          updateCurve(GeometryId id, const CurveDesc& desc);
     VoidResult          updateRect(GeometryId id, const RectDesc& desc);
     VoidResult          updateEllipse(GeometryId id, const EllipseDesc& desc);
     VoidResult          updatePolygon(GeometryId id, const PolygonDesc& desc);
+    VoidResult          updateStrokes(GeometryId id, const StrokesDesc& desc);
+    VoidResult          updateArea(GeometryId id, const AreaDesc& desc);
+    VoidResult          updateFace(GeometryId id, const FaceDesc& desc);
     Result<GeometryBounds> getGeometryBounds(GeometryId id) const;
     Result<std::vector<Vec2f>> getGeometryPath(GeometryId id) const;
 
@@ -534,6 +542,9 @@ public:
     Result<EllipseDesc>  getEllipse(GeometryId id) const;
     Result<PolylineDesc> getPolyline(GeometryId id) const;
     Result<PolygonDesc>  getPolygon(GeometryId id) const;
+    Result<StrokesDesc>  getStrokes(GeometryId id) const;
+    Result<AreaDesc>     getArea(GeometryId id) const;
+    Result<FaceDesc>     getFace(GeometryId id) const;
     Result<CurveDesc>    getCurve(GeometryId id) const;
 
     // =======================================================================

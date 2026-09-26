@@ -82,6 +82,8 @@ json::Value enc(E value) { return enc(static_cast<uint32_t>(value)); }
 // MSVC accepted it without /permissive-, which is why this survived every
 // local build and failed on the first GCC and Clang run.
 json::Value enc(const CurveDesc::Segment& segment);
+json::Value enc(const PenStroke& stroke);
+json::Value enc(const AreaDesc& area);
 json::Value enc(const RampStop& stop);
 json::Value enc(const PluginValue& value);
 json::Value enc(const PluginParams& params);
@@ -103,6 +105,24 @@ json::Value enc(const CurveDesc::Segment& segment) {
     out.push(enc(segment.cp1));
     out.push(enc(segment.p1));
     return out;
+}
+
+json::Value enc(const PenStroke& stroke) {
+    json::Value out = json::Value::object();
+    out["points"] = enc(stroke.points);
+    if (!stroke.sizes.empty()) {
+        out["sizes"] = enc(stroke.sizes);
+    }
+    out["size"] = enc(stroke.size);
+    out["round"] = enc(stroke.round);
+    out["pixelPerfect"] = enc(stroke.pixelPerfect);
+    out["erase"] = enc(stroke.erase);
+    out["kind"] = enc(static_cast<uint32_t>(stroke.kind));
+    return out;
+}
+
+json::Value enc(const AreaDesc& area) {
+    return enc(area.contours);
 }
 
 json::Value enc(const RampStop& stop) {
@@ -176,6 +196,7 @@ struct DecodeContext {
 void dec(const json::Value& value, const DecodeContext&, bool& out)     { out = value.asBool(out); }
 void dec(const json::Value& value, const DecodeContext&, float& out)    { out = static_cast<float>(value.asNumber(out)); }
 void dec(const json::Value& value, const DecodeContext&, uint32_t& out) { out = static_cast<uint32_t>(value.asNumber(out)); }
+void dec(const json::Value& value, const DecodeContext&, int32_t& out)  { out = static_cast<int32_t>(value.asNumber(out)); }
 void dec(const json::Value& value, const DecodeContext&, int64_t& out)  { out = static_cast<int64_t>(value.asNumber(static_cast<double>(out))); }
 void dec(const json::Value& value, const DecodeContext&, std::string& out) {
     if (value.isString()) {
@@ -219,6 +240,8 @@ void dec(const json::Value& value, const DecodeContext&, E& out) {
 
 // Declared ahead of the template for the same reason as the enc overloads.
 void dec(const json::Value& value, const DecodeContext& ctx, CurveDesc::Segment& out);
+void dec(const json::Value& value, const DecodeContext& ctx, PenStroke& out);
+void dec(const json::Value& value, const DecodeContext& ctx, AreaDesc& out);
 void dec(const json::Value& value, const DecodeContext& ctx, RampStop& out);
 void dec(const json::Value& value, const DecodeContext& ctx, PluginValue& out);
 void dec(const json::Value& value, const DecodeContext& ctx, PluginParams& out);
@@ -245,6 +268,20 @@ void dec(const json::Value& value, const DecodeContext& ctx, CurveDesc::Segment&
         dec(value.items()[2], ctx, out.cp1);
         dec(value.items()[3], ctx, out.p1);
     }
+}
+
+void dec(const json::Value& value, const DecodeContext& ctx, PenStroke& out) {
+    if (const json::Value* v = value.find("points"))       { dec(*v, ctx, out.points); }
+    if (const json::Value* v = value.find("sizes"))        { dec(*v, ctx, out.sizes); }
+    if (const json::Value* v = value.find("size"))         { dec(*v, ctx, out.size); }
+    if (const json::Value* v = value.find("round"))        { dec(*v, ctx, out.round); }
+    if (const json::Value* v = value.find("pixelPerfect")) { dec(*v, ctx, out.pixelPerfect); }
+    if (const json::Value* v = value.find("erase"))        { dec(*v, ctx, out.erase); }
+    if (const json::Value* v = value.find("kind"))         { dec(*v, ctx, out.kind); }
+}
+
+void dec(const json::Value& value, const DecodeContext& ctx, AreaDesc& out) {
+    dec(value, ctx, out.contours);
 }
 
 void dec(const json::Value& value, const DecodeContext& ctx, RampStop& out) {
@@ -411,7 +448,10 @@ json::Value writeGeometry(const GeometryData& data) {
         else if constexpr (std::is_same_v<Shape, EllipseDesc>)  { obj["shape"] = enc(std::string("ellipse")); }
         else if constexpr (std::is_same_v<Shape, CircleDesc>)   { obj["shape"] = enc(std::string("circle")); }
         else if constexpr (std::is_same_v<Shape, PolygonDesc>)  { obj["shape"] = enc(std::string("polygon")); }
-        else                                                    { obj["shape"] = enc(std::string("curve")); }
+        else if constexpr (std::is_same_v<Shape, CurveDesc>)    { obj["shape"] = enc(std::string("curve")); }
+        else if constexpr (std::is_same_v<Shape, StrokesDesc>)  { obj["shape"] = enc(std::string("strokes")); }
+        else if constexpr (std::is_same_v<Shape, AreaDesc>)     { obj["shape"] = enc(std::string("area")); }
+        else                                                    { obj["shape"] = enc(std::string("face")); }
         reflect::mapShape(writer, copy);
     }, data.shape);
     return obj;
@@ -435,6 +475,9 @@ bool readGeometryShape(const json::Value& obj, const DecodeContext& ctx,
     if (name == "circle")   { CircleDesc d{};   reflect::mapShape(reader, d); out = d; return true; }
     if (name == "polygon")  { PolygonDesc d{};  reflect::mapShape(reader, d); out = d; return true; }
     if (name == "curve")    { CurveDesc d{};    reflect::mapShape(reader, d); out = d; return true; }
+    if (name == "strokes")  { StrokesDesc d{};  reflect::mapShape(reader, d); out = d; return true; }
+    if (name == "area")     { AreaDesc d{};     reflect::mapShape(reader, d); out = d; return true; }
+    if (name == "face")     { FaceDesc d{};     reflect::mapShape(reader, d); out = d; return true; }
     return false;
 }
 

@@ -316,7 +316,72 @@ void testMigrationChain() {
 
 } // namespace
 
+// Freehand marks, areas and faces are saved as what they are -- paths, brush
+// and all -- and a reloaded document draws them the same, turned too.
+void testFreehandRoundTrip() {
+    auto source = LSContext::create();
+    const DocumentId doc = source->createDocument({"freehand", 32, 32}).value;
+    const SpriteId sprite = source->createSprite(doc).value;
+    const LayerId layer = source->createLayer(sprite, {"ink"}).value;
+
+    StrokesDesc strokes;
+    PenStroke line;
+    line.points = { {4.5f, 4.5f}, {12.5f, 9.5f}, {20.5f, 4.5f} };
+    line.sizes = { 1.f, 2.f, 3.f };
+    PenStroke dots;
+    dots.kind = PenKind::Dots;
+    dots.points = { {6.5f, 20.5f}, {9.5f, 22.5f} };
+    PenStroke rub;
+    rub.erase = true;
+    rub.round = true;
+    rub.size = 3.f;
+    rub.points = { {12.5f, 9.5f} };
+    strokes.strokes = { line, dots, rub };
+    FillSolidOp ink;
+    ink.targetRegion = source->createRegionFromGeometry(source->createStrokes(doc, strokes).value).value;
+    ink.fallbackColor = {200, 60, 40, 255};
+    LS_REQUIRE(source->addOperation(layer, ink).ok());
+
+    IntervalSet box;
+    for (int32_t y = 14; y < 26; ++y) {
+        box.intervals.push_back({ y, 14, 26 });
+    }
+    FaceDesc face;
+    face.area = geom::traceArea(box);
+    face.seed = geom::deepestPoint(box);
+    face.tolerance = 3;
+    FillSolidOp fill;
+    fill.targetRegion = source->createRegionFromGeometry(source->createFace(doc, face).value).value;
+    fill.fallbackColor = {40, 90, 200, 255};
+    LS_REQUIRE(source->addOperation(layer, fill).ok());
+
+    RotateOp turn;
+    turn.targetLayer = layer;
+    turn.angleDegrees = 21.f;
+    turn.pivotFallback = {16.f, 16.f};
+    turn.sampling = SamplingPolicy::RotSprite;
+    LS_REQUIRE(source->addOperation(layer, turn).ok());
+
+    auto before = source->compileSprite(sprite, exportProfile());
+    LS_REQUIRE(before.ok());
+    auto saved = source->serializeDocument(doc);
+    LS_REQUIRE(saved.ok());
+    auto loaded = LSContext::create();
+    LS_REQUIRE(loaded->deserializeDocument(saved.value).ok());
+    SpriteId restored;
+    for (uint64_t candidate = 1; candidate < 4096 && !restored.valid(); ++candidate) {
+        if (loaded->getSpriteInfo(SpriteId{candidate}).ok()) {
+            restored = SpriteId{candidate};
+        }
+    }
+    LS_REQUIRE(restored.valid());
+    auto after = loaded->compileSprite(restored, exportProfile());
+    LS_REQUIRE(after.ok());
+    LS_CHECK(after.value.raster.pixels == before.value.raster.pixels);
+}
+
 int main() {
+    testFreehandRoundTrip();
     testDocumentRoundTrip();
     testOperationRoundTrip();
     testForwardCompatibility();

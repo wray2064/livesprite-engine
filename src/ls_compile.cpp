@@ -1014,17 +1014,44 @@ const IntervalSet* regionCoverage(const CompileEnv& env, RegionId id) {
     return region == nullptr ? nullptr : &region->coverage;
 }
 
+// A face where a move lands it (see FaceDesc): found again, by a flood from
+// its seed moved, over what its layer drew before it, kept within two pixels
+// of its area moved -- so it fills up to the line around it however that line
+// was redrawn, and cannot run past it. A flood that gets further out than that
+// found nothing bounding it on this layer, and then the area moved is the fill.
+IntervalSet faceThrough(const FaceDesc& face, const Mat3f& matrix, const RasterBuffer* current) {
+    const IntervalSet area = geom::rasterizeAreaThrough(face.area, matrix);
+    if (geom::keepsPixelGrid(matrix) || current == nullptr || current->empty() || area.empty()) {
+        return area;
+    }
+    const IntervalSet reach = geom::expand(area, 2.f, true);
+    const IntervalSet limit = geom::expand(area, 3.f, true);
+    const Vec2f seed = matrix.transformPoint(face.seed);
+    const IntervalSet found = geom::floodRaster(
+        *current, { static_cast<int32_t>(std::floor(seed.x)), static_cast<int32_t>(std::floor(seed.y)) },
+        face.tolerance, face.diagonal, &limit);
+    if (found.empty() || !geom::subtractSets(found, reach).empty()) {
+        return area;
+    }
+    return found;
+}
+
 // A region where a move lands it. A region made from a shape is the shape,
-// moved and then rasterized. A region that is pixels -- what a document still
-// holds as pixels -- has no shape to move, so its coverage is moved as a
-// picture of itself, with the transform's own sampling: the one place a
+// moved and then rasterized; a face is found again against `current`, what
+// the layer has drawn before it. A region that is pixels -- what a document
+// still holds as pixels -- has no shape to move, so its coverage is moved as
+// a picture of itself, with the transform's own sampling: the one place a
 // picture is still resampled, and only until those pixels become shapes.
-IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& move) {
+IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& move,
+                          const RasterBuffer* current) {
     const RegionData* region = env.impl->findRegion(id);
     if (region == nullptr) {
         return {};
     }
     if (const GeometryData* geometry = env.impl->findGeometry(region->source)) {
+        if (const FaceDesc* face = std::get_if<FaceDesc>(&geometry->shape)) {
+            return faceThrough(*face, move.matrix, current);
+        }
         return env.impl->rasterizeGeometryThrough(*geometry, move.matrix);
     }
     if (geom::keepsPixelGrid(move.matrix)) {
@@ -1898,7 +1925,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
     // moved and then rasterized. Its pattern's frame is still worked out from
     // the region as drawn (coverageOf), so the move carries the frame too.
     auto placed = [&](RegionId region, const IntervalSet& drawn) {
-        return env.move == nullptr ? drawn : regionThrough(env, region, *env.move);
+        return env.move == nullptr ? drawn : regionThrough(env, region, *env.move, &current);
     };
     auto placedPoints = [&](std::vector<Vec2f> points) {
         if (env.move != nullptr) {
@@ -3088,7 +3115,7 @@ Result<CompileResult> LSContext::compileLayerWithin(
                 continue;
             }
             const IntervalSet landed = move == nullptr
-                ? IntervalSet{} : regionThrough(env, clear->targetRegion, *move);
+                ? IntervalSet{} : regionThrough(env, clear->targetRegion, *move, &result.raster);
             const IntervalSet* coverage = move == nullptr ? drawn : &landed;
             for (const Interval& interval : coverage->intervals) {
                 for (int32_t x = interval.x0; x < interval.x1; ++x) {
