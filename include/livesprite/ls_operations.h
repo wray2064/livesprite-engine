@@ -139,6 +139,10 @@ struct StrokePolylineOp {
     SnapPolicy      snap            = SnapPolicy::Grid;
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;
+    // What has been erased from it: strokes (a StrokesDesc geometry) whose
+    // pixels it no longer draws, moved with it, so erasing a line leaves it a
+    // line and takes nothing else. Null when nothing has been.
+    GeometryId      erase;
 };
 
 struct StrokeCurveOp {
@@ -152,6 +156,7 @@ struct StrokeCurveOp {
     Color           fallbackColor   = Color::black();
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;
+    GeometryId      erase;                         // see StrokePolylineOp::erase
 };
 
 struct StrokeRegionBoundaryOp {
@@ -187,6 +192,7 @@ struct StrokePixelPathOp {
     SnapPolicy      snap            = SnapPolicy::Grid;
     BlendMode       blend           = BlendMode::Normal;
     float           opacity         = 1.f;
+    GeometryId      erase;                         // see StrokePolylineOp::erase
 };
 
 // ---------------------------------------------------------------------------

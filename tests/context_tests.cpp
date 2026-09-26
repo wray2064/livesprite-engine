@@ -1403,6 +1403,58 @@ void testFacesBetweenWalls(LSContext& ctx) {
     }
 }
 
+// A line erased keeps the erase to itself: the fill under it is untouched,
+// and turned, the gap goes with the line.
+void testErasingALineTakesOnlyTheLine(LSContext& ctx) {
+    const Color blue {30, 70, 110, 255};
+    const Color orange {230, 140, 60, 255};
+    auto doc = ctx.createDocument({"erased line", 32, 32});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"line"});
+    FillSolidOp fill;
+    fill.targetRegion = ctx.createRegionFromGeometry(
+        ctx.createRect(doc.value, {{4.f, 4.f}, 24.f, 24.f, 0.f}).value).value;
+    fill.fallbackColor = blue;
+    LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+    PolylineDesc across;
+    across.points = { { 4.5f, 16.5f }, { 27.5f, 16.5f } };
+    StrokePixelPathOp line;
+    line.path = ctx.createPolyline(doc.value, across).value;
+    line.fallbackColor = orange;
+    const OperationId lineOp = ctx.addOperation(layer.value, line).value;
+
+    StrokesDesc eraser;
+    PenStroke rub;
+    rub.points = { { 16.5f, 12.5f }, { 16.5f, 20.5f } };
+    rub.size = 3.f;
+    eraser.strokes.push_back(rub);
+    line.erase = ctx.createStrokes(doc.value, eraser).value;
+    LS_REQUIRE(ctx.updateOperation(lineOp, line).ok());
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 32;
+    profile.outputHeight = 32;
+    profile.palette = PalettePolicy::Unconstrained;
+    auto drawn = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(drawn.ok());
+    LS_CHECK(readPixel(drawn.value.raster, 16, 16) == blue);     // the line is gone there
+    LS_CHECK(readPixel(drawn.value.raster, 8, 16) == orange);    // and nowhere else
+    LS_CHECK(readPixel(drawn.value.raster, 16, 13) == blue);     // the fill untouched
+
+    RotateOp rotate;
+    rotate.targetLayer = layer.value;
+    rotate.angleDegrees = 90.f;
+    rotate.pivotFallback = { 16.f, 16.f };
+    LS_REQUIRE(ctx.addOperation(layer.value, rotate).ok());
+    auto turned = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(turned.ok());
+    // A quarter turn about (16, 16) stands the line up on column 15.
+    LS_CHECK(readPixel(turned.value.raster, 15, 16) == blue);
+    LS_CHECK(readPixel(turned.value.raster, 15, 8) == orange);
+    LS_CHECK(readPixel(turned.value.raster, 12, 16) == blue);
+}
+
 // A shape erased stays a shape: what was rubbed out is kept as the strokes
 // that rubbed it, so the hole goes where the shape goes, and a hole rubbed in
 // a filled shape does not grow an edge of its own.
@@ -1487,6 +1539,7 @@ int main() {
     testDeformsAndPlacementMoveShapes(*ctx);
     testRegionClips(*ctx);
     testFacesBetweenWalls(*ctx);
+    testErasingALineTakesOnlyTheLine(*ctx);
 
     return lstest::report("context");
 }

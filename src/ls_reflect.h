@@ -51,11 +51,11 @@ template<typename Ar> void mapOp(Ar& ar, FillSemanticColorOp& op) {
 }
 template<typename Ar> void mapOp(Ar& ar, StrokePolylineOp& op) {
     F(polyline) F(width) F(cap) F(join) F(miterLimit) F(taper) F(strokePattern) F(paletteRole)
-    F(fallbackColor) F(snap) F(blend) F(opacity)
+    F(fallbackColor) F(snap) F(blend) F(opacity) F(erase)
 }
 template<typename Ar> void mapOp(Ar& ar, StrokeCurveOp& op) {
     F(curve) F(width) F(cap) F(join) F(miterLimit) F(taper) F(paletteRole) F(fallbackColor)
-    F(blend) F(opacity)
+    F(blend) F(opacity) F(erase)
 }
 template<typename Ar> void mapOp(Ar& ar, StrokeRegionBoundaryOp& op) {
     F(targetRegion) F(width) F(cap) F(join) F(miterLimit) F(paletteRole) F(fallbackColor)
@@ -66,7 +66,7 @@ template<typename Ar> void mapOp(Ar& ar, StrokeBrushOp& op) {
     F(fallbackColor) F(blend) F(opacity)
 }
 template<typename Ar> void mapOp(Ar& ar, StrokePixelPathOp& op) {
-    F(path) F(paletteRole) F(fallbackColor) F(snap) F(blend) F(opacity)
+    F(path) F(paletteRole) F(fallbackColor) F(snap) F(blend) F(opacity) F(erase)
 }
 template<typename Ar> void mapOp(Ar& ar, GenerateSilhouetteOutlineOp& op) {
     F(targetSprite) F(thickness) F(side) F(corner) F(diagonal) F(paletteRole) F(fallbackColor)

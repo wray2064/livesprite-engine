@@ -2161,6 +2161,17 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     return source;
 }
 
+// A line less what was erased from it (see StrokePolylineOp::erase): the
+// erasing strokes where the line lands, taken away.
+IntervalSet lessErased(const CompileEnv& env, IntervalSet drawn, GeometryId erase) {
+    const GeometryData* strokes = env.impl->findGeometry(erase);
+    if (strokes == nullptr) {
+        return drawn;
+    }
+    return geom::subtractSets(drawn, env.move == nullptr ? env.impl->rasterizeGeometry(*strokes)
+                                                         : geometryThrough(env, *strokes, *env.move));
+}
+
 // Resolve one mark operation into coverage plus colour.
 bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
                           const RasterBuffer& current, Mark& out) {
@@ -2441,6 +2452,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             }
             out.coverage = geom::normalize(std::move(kept));
         }
+        out.coverage = lessErased(env, std::move(out.coverage), stroke->erase);
 
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
@@ -2462,6 +2474,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
                                   stroke->width * placedScale(points),
                                   stroke->cap, stroke->join, stroke->miterLimit, stroke->taper,
                                   SnapPolicy::None);
+        out.coverage = lessErased(env, std::move(out.coverage), stroke->erase);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;
@@ -2473,9 +2486,9 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             return false;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = env.move == nullptr
+        out.coverage = lessErased(env, env.move == nullptr
             ? env.impl->rasterizeGeometry(*geometry)
-            : geometryThrough(env, *geometry, *env.move);
+            : geometryThrough(env, *geometry, *env.move), stroke->erase);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;

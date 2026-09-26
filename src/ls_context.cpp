@@ -53,6 +53,7 @@ LS_DETECT_MEMBER(outlineB);
 LS_DETECT_MEMBER(outlineOps);
 LS_DETECT_MEMBER(tilemap);
 LS_DETECT_MEMBER(tileset);
+LS_DETECT_MEMBER(erase);
 
 #undef LS_DETECT_MEMBER
 
@@ -181,6 +182,7 @@ std::vector<uint64_t> operationDependencies(const Operation& op) {
         if constexpr (has_outlineB<Op>::value)        pushId(out, concrete.outlineB.value);
         if constexpr (has_tilemap<Op>::value)         pushId(out, concrete.tilemap.value);
         if constexpr (has_tileset<Op>::value)         pushId(out, concrete.tileset.value);
+        if constexpr (has_erase<Op>::value)           pushId(out, concrete.erase.value);
         if constexpr (has_outlineOps<Op>::value) {
             for (const OperationId& id : concrete.outlineOps) {
                 pushId(out, id.value);
