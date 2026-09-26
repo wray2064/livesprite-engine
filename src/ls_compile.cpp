@@ -2445,6 +2445,22 @@ Result<CompileResult> LSContext::compileLayerWithin(
             continue;
         }
 
+        // A fade: the alpha of everything drawn so far, scaled.
+        if (const auto* fade = std::get_if<FadeOp>(&data->op)) {
+            const float keep = std::max(0.f, std::min(1.f, fade->opacity));
+            if (keep < 1.f) {
+                for (uint32_t y = 0; y < result.raster.height; ++y) {
+                    uint8_t* row = result.raster.row(y);
+                    for (uint32_t x = 0; x < result.raster.width; ++x) {
+                        uint8_t& a = row[x * 4u + 3u];
+                        a = static_cast<uint8_t>(std::lround(static_cast<float>(a) * keep));
+                    }
+                }
+            }
+            env.note("op " + std::to_string(opId.value) + ": faded to " + std::to_string(keep));
+            continue;
+        }
+
         // A tilemap: each cell the tile it names, from the tileset's layers.
         if (const auto* draw = std::get_if<DrawTilemapOp>(&data->op)) {
             const TilemapData* map = impl_->findTilemap(draw->tilemap);

@@ -78,6 +78,9 @@ template<typename Ar> void mapOp(Ar& ar, GenerateDropShadowOp& op) {
 template<typename Ar> void mapOp(Ar& ar, ClearRegionOp& op) {
     F(targetRegion)
 }
+template<typename Ar> void mapOp(Ar& ar, FadeOp& op) {
+    F(opacity)
+}
 template<typename Ar> void mapOp(Ar& ar, DrawTilemapOp& op) {
     F(tilemap) F(tileset) F(origin) F(blend) F(opacity)
 }

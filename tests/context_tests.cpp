@@ -453,6 +453,46 @@ void testClearRegion(LSContext& ctx) {
     LS_CHECK(readPixel(compiled.value.raster, 5, 4).a == 0);
 }
 
+// A fade: what the layer drew before it, more transparent; what comes after
+// it is not faded.
+void testFade(LSContext& ctx) {
+    auto doc = ctx.createDocument({"fade", 8, 8});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"cel"});
+    PixelRegionDesc two;
+    two.pixels = { {{1, 1}, Color::black()}, {{2, 1}, Color::black()} };
+    FillSolidOp fill;
+    fill.targetRegion = ctx.createRegionFromPixels(doc.value, two).value;
+    fill.fallbackColor = {200, 40, 40, 255};
+    LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+    FadeOp fade;
+    fade.opacity = 0.5f;
+    auto faded = ctx.addOperation(layer.value, fade);
+    LS_REQUIRE(faded.ok());
+    PixelRegionDesc one;
+    one.pixels = { {{2, 1}, Color::black()} };
+    FillSolidOp after;
+    after.targetRegion = ctx.createRegionFromPixels(doc.value, one).value;
+    after.fallbackColor = {40, 200, 40, 255};
+    LS_REQUIRE(ctx.addOperation(layer.value, after).ok());
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 8;
+    profile.outputHeight = 8;
+    profile.alpha = AlphaPolicy::Preserve;      // the default would threshold it away
+    auto compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    LS_CHECK(readPixel(compiled.value.raster, 1, 1).a >= 126 && readPixel(compiled.value.raster, 1, 1).a <= 129);
+    LS_CHECK(readPixel(compiled.value.raster, 2, 1).a == 255 && readPixel(compiled.value.raster, 2, 1).g == 200);
+
+    // Driven by its parameter, like any other.
+    LS_REQUIRE(ctx.setOperationParameter(faded.value, "opacity", ParameterValue{1.f}).ok());
+    compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    LS_CHECK(readPixel(compiled.value.raster, 1, 1).a == 255);
+}
+
 // A tilemap: cells drawn from a tileset's layers, turned as each cell says;
 // editing a tile redraws every cell naming it; a snapshot holds the grid; a
 // cloned layer gets a grid of its own; saving and loading keep it all.
@@ -647,6 +687,7 @@ int main() {
     testDropShadow(*ctx);
     testClearRegion(*ctx);
     testTilemap(*ctx);
+    testFade(*ctx);
     testRotSprite(*ctx);
 
     return lstest::report("context");

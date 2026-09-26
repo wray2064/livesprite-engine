@@ -1,6 +1,6 @@
 # Operations
 
-The 42 operation types, what each one does, and the parameters worth knowing.
+The 43 operation types, what each one does, and the parameters worth knowing.
 Full field lists are in [`ls_operations.h`](../include/livesprite/ls_operations.h);
 at runtime, `describeOperation(id)` reports every drivable parameter and its
 type.
@@ -73,6 +73,12 @@ from straddling two columns. A `strokePattern` thins the mark along its length.
 
 An eraser that works on shapes without baking them: the erased pixels are a
 region like any other, grown and shrunk by the same calls.
+
+## Fading
+
+| Operation | What it does |
+|---|---|
+| `FadeOp` | Multiplies the alpha of everything the layer has drawn so far by `opacity`; what comes after it is not faded. A cel's own opacity under the layer's, where an editor keeps layers the same across frames |
 
 ## Tilemaps
 

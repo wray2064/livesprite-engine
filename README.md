@@ -71,7 +71,7 @@ than asking you to compare by eye.
 | [Getting started](docs/getting-started.md) | Build a sprite in code, step by step |
 | [Embedding](docs/embedding.md) | Consuming the engine from C++, and from every other language |
 | [Concepts](docs/concepts.md) | The model: regions, operations, compiling, anchoring, attachment |
-| [Operations](docs/operations.md) | The catalogue: all 42 operation types and their parameters |
+| [Operations](docs/operations.md) | The catalogue: all 43 operation types and their parameters |
 | [File format](docs/file-format.md) | The document, the package container, metadata, versioning |
 | [Performance and limits](docs/performance-and-limits.md) | Measured numbers, and what the engine does not do |
 | [Licensing](LICENSING.md) | What licence applies where, and the reasoning |

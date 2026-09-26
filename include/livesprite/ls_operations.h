@@ -241,6 +241,13 @@ struct ClearRegionOp {
     RegionId        targetRegion;
 };
 
+// Everything the layer has drawn so far, made more transparent: its alpha
+// times `opacity`. A cel's own opacity, under the layer's, in an editor that
+// keeps a layer the same across frames but lets each frame's drawing fade.
+struct FadeOp {
+    float           opacity         = 1.f;
+};
+
 // A tilemap drawn from a tileset sprite: each cell the tile it names -- that
 // sprite's layer, taken from its top-left tileWidth x tileHeight -- turned as
 // the cell says, the grid's top-left corner at `origin`. Over what the layer
@@ -583,7 +590,8 @@ using Operation = std::variant<
     // Effects added later go last, so no earlier type moves.
     GenerateDropShadowOp,
     ClearRegionOp,
-    DrawTilemapOp
+    DrawTilemapOp,
+    FadeOp
 >;
 
 // The same list again, in a form code can walk.
@@ -593,7 +601,7 @@ using Operation = std::variant<
 // rather than repeating the roll call. The static_assert below makes the two
 // lists a compile error if they ever disagree, so the duplication is checked
 // rather than trusted.
-#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp) X(GenerateDropShadowOp) X(ClearRegionOp) X(DrawTilemapOp)
+#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp) X(GenerateDropShadowOp) X(ClearRegionOp) X(DrawTilemapOp) X(FadeOp)
 
 #define LS_OP_COUNT_ONE(T) + 1
 static_assert(std::variant_size_v<Operation> == (0 LS_OPERATION_TYPES(LS_OP_COUNT_ONE)),
