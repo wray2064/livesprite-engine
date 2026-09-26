@@ -671,6 +671,136 @@ void testRotSprite(LSContext& ctx) {
     LS_CHECK(readPixel(compiled.value.raster, 16, 16).a != 0);     // the middle stays
 }
 
+// A closed outline one pixel wide, a wobbly blob like one drawn by hand,
+// turned by RotSprite at many angles: it stays closed -- nothing outside it
+// reaches the middle four ways -- and a fill inside it stays inside, the
+// outline drawn over the fill wherever the two meet.
+void testRotatedOutlinesStayClosed(LSContext& ctx) {
+    constexpr int kSize = 64;
+    constexpr int kMid = 32;
+    // The outline: a polar wobble, joined point to point.
+    std::vector<Vec2i> ring;
+    Vec2i last { -1, -1 };
+    for (int i = 0; i <= 720; ++i) {
+        const float t = static_cast<float>(i) / 720.f * 6.2831853f;
+        const float r = 16.f + 5.f * std::sin(5.f * t) + 2.f * std::cos(3.f * t);
+        const Vec2i p { static_cast<int32_t>(std::lround(kMid + r * std::cos(t))),
+                        static_cast<int32_t>(std::lround(kMid + r * std::sin(t))) };
+        if (p.x == last.x && p.y == last.y) {
+            continue;
+        }
+        if (last.x >= 0) {
+            // Bresenham from the last point, so the loop is 8-connected.
+            int32_t x0 = last.x, y0 = last.y;
+            const int32_t dx = std::abs(p.x - x0), dy = -std::abs(p.y - y0);
+            const int32_t sx = x0 < p.x ? 1 : -1, sy = y0 < p.y ? 1 : -1;
+            int32_t err = dx + dy;
+            while (x0 != p.x || y0 != p.y) {
+                const int32_t e2 = 2 * err;
+                if (e2 >= dy) { err += dy; x0 += sx; }
+                if (e2 <= dx) { err += dx; y0 += sy; }
+                ring.push_back({x0, y0});
+            }
+        } else {
+            ring.push_back(p);
+        }
+        last = p;
+    }
+    const Color orange {230, 140, 60, 255};
+    const Color blue {30, 70, 110, 255};
+    // The inside: everything the outline encloses, found by flooding from the
+    // border.
+    std::vector<uint8_t> wall(kSize * kSize, 0);
+    for (Vec2i p : ring) { wall[p.y * kSize + p.x] = 1; }
+    const auto outsideOf = [](const std::vector<uint8_t>& blocked, int size) {
+        std::vector<uint8_t> outside(size * size, 0);
+        std::vector<Vec2i> stack;
+        for (int i = 0; i < size; ++i) {
+            stack.push_back({i, 0}); stack.push_back({i, size - 1});
+            stack.push_back({0, i}); stack.push_back({size - 1, i});
+        }
+        while (!stack.empty()) {
+            const Vec2i p = stack.back();
+            stack.pop_back();
+            if (p.x < 0 || p.y < 0 || p.x >= size || p.y >= size) { continue; }
+            const int at = p.y * size + p.x;
+            if (outside[at] || blocked[at]) { continue; }
+            outside[at] = 1;
+            stack.push_back({p.x + 1, p.y}); stack.push_back({p.x - 1, p.y});
+            stack.push_back({p.x, p.y + 1}); stack.push_back({p.x, p.y - 1});
+        }
+        return outside;
+    };
+    const std::vector<uint8_t> outsideBefore = outsideOf(wall, kSize);
+    PixelRegionDesc inside;
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            if (!outsideBefore[y * kSize + x] && !wall[y * kSize + x]) {
+                inside.pixels.push_back({{x, y}, Color::black()});
+            }
+        }
+    }
+    PixelRegionDesc outline;
+    for (Vec2i p : ring) { outline.pixels.push_back({p, Color::black()}); }
+    outline.closeSameColorBoundaries = false;
+    inside.closeSameColorBoundaries = false;
+
+    for (int filled = 0; filled < 2; ++filled) {
+        auto doc = ctx.createDocument({"blob", kSize, kSize});
+        auto sprite = ctx.createSprite(doc.value);
+        auto layer = ctx.createLayer(sprite.value, {"blob"});
+        if (filled != 0) {
+            FillSolidOp fill;
+            fill.targetRegion = ctx.createRegionFromPixels(doc.value, inside).value;
+            fill.fallbackColor = blue;
+            LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+        }
+        FillSolidOp line;
+        line.targetRegion = ctx.createRegionFromPixels(doc.value, outline).value;
+        line.fallbackColor = orange;
+        LS_REQUIRE(ctx.addOperation(layer.value, line).ok());
+        RotateOp rotate;
+        rotate.targetLayer = layer.value;
+        rotate.pivotFallback = {static_cast<float>(kMid), static_cast<float>(kMid)};
+        rotate.sampling = SamplingPolicy::RotSprite;
+        auto rotation = ctx.addOperation(layer.value, rotate);
+        LS_REQUIRE(rotation.ok());
+        CompileProfile profile;
+        profile.type = CompileProfileType::Export;
+        profile.outputWidth = kSize;
+        profile.outputHeight = kSize;
+        int broken = 0;
+        int leaked = 0;
+        for (int angle = 3; angle < 360; angle += 7) {
+            LS_REQUIRE(ctx.setOperationParameter(rotation.value, "angleDegrees",
+                                                 ParameterValue{static_cast<float>(angle)}).ok());
+            auto compiled = ctx.compileSprite(sprite.value, profile);
+            LS_REQUIRE(compiled.ok());
+            std::vector<uint8_t> blocked(kSize * kSize, 0);
+            for (int y = 0; y < kSize; ++y) {
+                for (int x = 0; x < kSize; ++x) {
+                    const Color c = readPixel(compiled.value.raster, x, y);
+                    blocked[y * kSize + x] = c.a != 0 && c.r == orange.r ? 1 : 0;
+                }
+            }
+            const std::vector<uint8_t> outside = outsideOf(blocked, kSize);
+            broken += outside[kMid * kSize + kMid] ? 1 : 0;
+            for (int y = 0; y < kSize; ++y) {
+                for (int x = 0; x < kSize; ++x) {
+                    const Color c = readPixel(compiled.value.raster, x, y);
+                    leaked += (outside[y * kSize + x] && c.a != 0 && c.b == blue.b) ? 1 : 0;
+                }
+            }
+        }
+        LS_CHECK(broken == 0);
+        LS_CHECK(leaked == 0);
+        if (broken != 0 || leaked != 0) {
+            std::printf("    %s: %d angles broken open, %d fill pixels outside\n",
+                        filled != 0 ? "filled" : "outline", broken, leaked);
+        }
+    }
+}
+
 int main() {
     auto ctx = LSContext::create();
     LS_REQUIRE_MAIN(ctx != nullptr);
@@ -689,6 +819,7 @@ int main() {
     testTilemap(*ctx);
     testFade(*ctx);
     testRotSprite(*ctx);
+    testRotatedOutlinesStayClosed(*ctx);
 
     return lstest::report("context");
 }

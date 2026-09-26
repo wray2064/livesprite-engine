@@ -210,9 +210,44 @@ RasterBuffer repairInteriorGaps(const RasterBuffer& raster) {
         {-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, -1}, {-1, 1}, {1, 1}
     };
 
+    // Only pinholes: an enclosed patch of one or two pixels. A bigger one --
+    // the inside of a ring -- is meant to be there, and filling its edge would
+    // thicken the ring inwards.
+    std::unordered_set<uint64_t> sized;
+    std::unordered_set<uint64_t> pinholes;
     for (int32_t y = 0; y < static_cast<int32_t>(raster.height); ++y) {
         for (int32_t x = 0; x < static_cast<int32_t>(raster.width); ++x) {
-            if (getRasterPixel(raster, x, y).a != 0 || exterior.count(pixelKey(x, y)) != 0) {
+            const uint64_t start = pixelKey(x, y);
+            if (getRasterPixel(raster, x, y).a != 0 || exterior.count(start) != 0 ||
+                sized.count(start) != 0) {
+                continue;
+            }
+            std::vector<uint64_t> patch { start };
+            sized.insert(start);
+            for (size_t i = 0; i < patch.size() && patch.size() <= 2; ++i) {
+                const int32_t px = keyX(patch[i]);
+                const int32_t py = keyY(patch[i]);
+                const Vec2i next[4] = { {px - 1, py}, {px + 1, py}, {px, py - 1}, {px, py + 1} };
+                for (Vec2i n : next) {
+                    if (n.x < 0 || n.y < 0 || n.x >= static_cast<int32_t>(raster.width) ||
+                        n.y >= static_cast<int32_t>(raster.height)) {
+                        continue;
+                    }
+                    const uint64_t key = pixelKey(n.x, n.y);
+                    if (getRasterPixel(raster, n.x, n.y).a == 0 && sized.insert(key).second) {
+                        patch.push_back(key);
+                    }
+                }
+            }
+            if (patch.size() <= 2) {
+                pinholes.insert(patch.begin(), patch.end());
+            }
+        }
+    }
+
+    for (int32_t y = 0; y < static_cast<int32_t>(raster.height); ++y) {
+        for (int32_t x = 0; x < static_cast<int32_t>(raster.width); ++x) {
+            if (pinholes.count(pixelKey(x, y)) == 0) {
                 continue;
             }
             std::map<uint32_t, int32_t> votes;
@@ -414,6 +449,116 @@ RasterBuffer scale2x(const RasterBuffer& source) {
     return out;
 }
 
+// Thin lines kept whole. RotSprite takes one sample for each pixel it draws,
+// and a line one pixel wide can pass between two samples. So every pixel of
+// a thin run -- no more than four of its eight neighbours its own colour --
+// gets an anchor where it lands: a pixel of its colour there or next to it,
+// made there if there is none. Then every two touching pixels of such a run
+// have their anchors joined: where they land apart, the gap between them is
+// drawn in their colour -- over a fill, if a fill sampled there, since an
+// outline drawn over a fill is drawn over it. The anchors are fixed before any
+// joining, so a chain of joins keeps a whole outline in one piece.
+void keepThinLinesWhole(const RasterBuffer& source, const Mat3f& matrix, RasterBuffer& out) {
+    const auto same = [](Color a, Color b) {
+        return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    };
+    const int32_t w = static_cast<int32_t>(source.width);
+    const int32_t h = static_cast<int32_t>(source.height);
+    const auto thin = [&](int32_t x, int32_t y, Color c) {
+        int neighbours = 0;
+        for (int32_t dy = -1; dy <= 1; ++dy) {
+            for (int32_t dx = -1; dx <= 1; ++dx) {
+                if ((dx != 0 || dy != 0) && same(getRasterPixel(source, x + dx, y + dy), c)) {
+                    ++neighbours;
+                }
+            }
+        }
+        return neighbours <= 4;
+    };
+    const auto lands = [&](int32_t x, int32_t y) {
+        const Vec2f p = matrix.transformPoint({ static_cast<float>(x) + 0.5f,
+                                                static_cast<float>(y) + 0.5f });
+        return Vec2i{ static_cast<int32_t>(std::floor(p.x)), static_cast<int32_t>(std::floor(p.y)) };
+    };
+    const auto inside = [&](Vec2i p) {
+        return p.x >= 0 && p.y >= 0 && p.x < static_cast<int32_t>(out.width) &&
+               p.y < static_cast<int32_t>(out.height);
+    };
+
+    // The anchors: for each thin source pixel, where its colour is drawn.
+    std::unordered_map<uint64_t, Vec2i> anchors;
+    for (int32_t y = 0; y < h; ++y) {
+        for (int32_t x = 0; x < w; ++x) {
+            const Color c = getRasterPixel(source, x, y);
+            if (c.a == 0 || !thin(x, y, c)) {
+                continue;
+            }
+            const Vec2i at = lands(x, y);
+            Vec2i anchor = at;
+            bool found = inside(at) && same(getRasterPixel(out, at.x, at.y), c);
+            // The nearest of the eight round it, straight neighbours first.
+            static constexpr int32_t kRound[8][2] = {
+                {1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1}
+            };
+            for (int i = 0; i < 8 && !found; ++i) {
+                const Vec2i n { at.x + kRound[i][0], at.y + kRound[i][1] };
+                if (inside(n) && same(getRasterPixel(out, n.x, n.y), c)) {
+                    anchor = n;
+                    found = true;
+                }
+            }
+            if (!found) {
+                if (!inside(at)) {
+                    continue;
+                }
+                setRasterPixel(out, at.x, at.y, c);
+            }
+            anchors[pixelKey(x, y)] = anchor;
+        }
+    }
+
+    // The joins: touching thin pixels of one colour, anchored apart.
+    static constexpr int32_t kAhead[4][2] = { {1, 0}, {1, 1}, {0, 1}, {-1, 1} };
+    for (int32_t y = 0; y < h; ++y) {
+        for (int32_t x = 0; x < w; ++x) {
+            auto from = anchors.find(pixelKey(x, y));
+            if (from == anchors.end()) {
+                continue;
+            }
+            const Color c = getRasterPixel(source, x, y);
+            for (const auto& step : kAhead) {
+                const int32_t nx = x + step[0];
+                const int32_t ny = y + step[1];
+                if (!same(getRasterPixel(source, nx, ny), c)) {
+                    continue;
+                }
+                auto to = anchors.find(pixelKey(nx, ny));
+                if (to == anchors.end()) {
+                    continue;
+                }
+                Vec2i a = from->second;
+                const Vec2i b = to->second;
+                if (std::max(std::abs(a.x - b.x), std::abs(a.y - b.y)) <= 1) {
+                    continue;
+                }
+                const int32_t dx = std::abs(b.x - a.x);
+                const int32_t dy = -std::abs(b.y - a.y);
+                const int32_t sx = a.x < b.x ? 1 : -1;
+                const int32_t sy = a.y < b.y ? 1 : -1;
+                int32_t err = dx + dy;
+                while (a.x != b.x || a.y != b.y) {
+                    const int32_t e2 = 2 * err;
+                    if (e2 >= dy) { err += dy; a.x += sx; }
+                    if (e2 <= dx) { err += dx; a.y += sy; }
+                    if (inside(a)) {
+                        setRasterPixel(out, a.x, a.y, c);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The largest picture RotSprite enlarges: 8x on each side is 64 times the
 // pixels, and past this the cost is a stall rather than a wait.
 constexpr uint64_t kMaxRotSpritePixels = 512ull * 512ull;
@@ -483,6 +628,7 @@ RasterBuffer transformRaster(const RasterBuffer& source, const Mat3f& matrix,
                     }
                 }
             }
+            keepThinLinesWhole(source, matrix, out);
             return out;
         }
     }
