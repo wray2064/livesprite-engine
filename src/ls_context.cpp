@@ -51,6 +51,8 @@ LS_DETECT_MEMBER(targetOutlineOp);
 LS_DETECT_MEMBER(outlineA);
 LS_DETECT_MEMBER(outlineB);
 LS_DETECT_MEMBER(outlineOps);
+LS_DETECT_MEMBER(tilemap);
+LS_DETECT_MEMBER(tileset);
 
 #undef LS_DETECT_MEMBER
 
@@ -162,6 +164,8 @@ std::vector<uint64_t> operationDependencies(const Operation& op) {
         if constexpr (has_targetOutlineOp<Op>::value) pushId(out, concrete.targetOutlineOp.value);
         if constexpr (has_outlineA<Op>::value)        pushId(out, concrete.outlineA.value);
         if constexpr (has_outlineB<Op>::value)        pushId(out, concrete.outlineB.value);
+        if constexpr (has_tilemap<Op>::value)         pushId(out, concrete.tilemap.value);
+        if constexpr (has_tileset<Op>::value)         pushId(out, concrete.tileset.value);
         if constexpr (has_outlineOps<Op>::value) {
             for (const OperationId& id : concrete.outlineOps) {
                 pushId(out, id.value);
@@ -225,6 +229,7 @@ OperationData* LSContext::Impl::findOperation(OperationId id) { return lookup(op
 PaletteData*   LSContext::Impl::findPalette(PaletteId id)     { return lookup(palettes, id); }
 RampData*      LSContext::Impl::findRamp(RampId id)           { return lookup(ramps, id); }
 PatternData*   LSContext::Impl::findPattern(PatternId id)     { return lookup(patterns, id); }
+TilemapData*   LSContext::Impl::findTilemap(TilemapId id)     { return lookup(tilemaps, id); }
 PivotData*     LSContext::Impl::findPivot(PivotId id)         { return lookup(pivots, id); }
 SocketData*    LSContext::Impl::findSocket(SocketId id)       { return lookup(sockets, id); }
 BoundaryData*  LSContext::Impl::findBoundary(BoundaryId id)   { return lookup(boundaries, id); }
@@ -239,6 +244,7 @@ const OperationData* LSContext::Impl::findOperation(OperationId id) const { retu
 const PaletteData*   LSContext::Impl::findPalette(PaletteId id) const     { return lookup(palettes, id); }
 const RampData*      LSContext::Impl::findRamp(RampId id) const           { return lookup(ramps, id); }
 const PatternData*   LSContext::Impl::findPattern(PatternId id) const     { return lookup(patterns, id); }
+const TilemapData*   LSContext::Impl::findTilemap(TilemapId id) const     { return lookup(tilemaps, id); }
 const PivotData*     LSContext::Impl::findPivot(PivotId id) const         { return lookup(pivots, id); }
 const SocketData*    LSContext::Impl::findSocket(SocketId id) const       { return lookup(sockets, id); }
 const BoundaryData*  LSContext::Impl::findBoundary(BoundaryId id) const   { return lookup(boundaries, id); }
@@ -421,6 +427,10 @@ Result<DocumentSnapshot> LSContext::snapshotDocumentState(DocumentId doc) const 
         if (const PatternData* data = impl_->findPattern(id)) { state->patterns[id.value] = *data; }
         captureSide(id.value);
     }
+    for (TilemapId id : document->tilemaps) {
+        if (const TilemapData* data = impl_->findTilemap(id)) { state->tilemaps[id.value] = *data; }
+        captureSide(id.value);
+    }
 
     for (SpriteId spriteId : document->sprites) {
         const SpriteData* sprite = impl_->findSprite(spriteId);
@@ -489,6 +499,7 @@ VoidResult LSContext::restoreDocumentState(DocumentId doc, const DocumentSnapsho
     for (const auto& [id, data] : state.palettes)   { impl_->palettes[id] = data; }
     for (const auto& [id, data] : state.ramps)      { impl_->ramps[id] = data; }
     for (const auto& [id, data] : state.patterns)   { impl_->patterns[id] = data; }
+    for (const auto& [id, data] : state.tilemaps)   { impl_->tilemaps[id] = data; }
     for (const auto& [id, data] : state.sprites)    { impl_->sprites[id] = data; }
     for (const auto& [id, data] : state.pivots)     { impl_->pivots[id] = data; }
     for (const auto& [id, data] : state.sockets)    { impl_->sockets[id] = data; }
@@ -589,6 +600,7 @@ void LSContext::Impl::eraseDocumentContents(DocumentId doc) {
     for (PaletteId id : document->palettes)  { forget(id.value); palettes.erase(id.value); }
     for (RampId id : document->ramps)        { forget(id.value); ramps.erase(id.value); }
     for (PatternId id : document->patterns)  { forget(id.value); patterns.erase(id.value); }
+    for (TilemapId id : document->tilemaps)  { forget(id.value); tilemaps.erase(id.value); }
     forget(doc.value);
 }
 
@@ -790,6 +802,7 @@ VoidResult LSContext::deleteDocument(DocumentId doc) {
     for (PaletteId id : data->palettes)   { impl_->palettes.erase(id.value); }
     for (RampId id : data->ramps)         { impl_->ramps.erase(id.value); }
     for (PatternId id : data->patterns)   { impl_->patterns.erase(id.value); }
+    for (TilemapId id : data->tilemaps)   { impl_->tilemaps.erase(id.value); }
 
     impl_->documents.erase(doc.value);
     impl_->documentOrder.erase(
@@ -913,6 +926,7 @@ namespace {
 struct CloneRemap {
     const std::map<uint64_t, uint64_t>* geometry = nullptr;
     const std::map<uint64_t, uint64_t>* regions  = nullptr;
+    const std::map<uint64_t, uint64_t>* tilemaps = nullptr;
     const std::map<uint64_t, uint64_t>* pivots   = nullptr;
     const std::map<uint64_t, uint64_t>* sockets  = nullptr;
     const std::map<uint64_t, uint64_t>* boundaries = nullptr;
@@ -939,6 +953,8 @@ struct CloneRemap {
             apply(geometry, value.value);
         } else if constexpr (std::is_same_v<Tag, TagRegion>) {
             apply(regions, value.value);
+        } else if constexpr (std::is_same_v<Tag, TagTilemap>) {
+            apply(tilemaps, value.value);
         } else if constexpr (std::is_same_v<Tag, TagPivot>) {
             apply(pivots, value.value);
         } else if constexpr (std::is_same_v<Tag, TagSocket>) {
@@ -1015,6 +1031,7 @@ RegionId cloneRegion(LSContext::Impl& impl, RegionId source,
 struct CollectHandles {
     std::vector<GeometryId>* geometry = nullptr;
     std::vector<RegionId>*   regions  = nullptr;
+    std::vector<TilemapId>*  tilemaps = nullptr;
 
     template<typename T>
     void field(const char*, T&) {}
@@ -1025,9 +1042,34 @@ struct CollectHandles {
             if (value.valid()) { geometry->push_back(GeometryId{ value.value }); }
         } else if constexpr (std::is_same_v<Tag, TagRegion>) {
             if (value.valid()) { regions->push_back(RegionId{ value.value }); }
+        } else if constexpr (std::is_same_v<Tag, TagTilemap>) {
+            if (value.valid() && tilemaps != nullptr) { tilemaps->push_back(TilemapId{ value.value }); }
         }
     }
 };
+
+// Duplicates a tilemap, or returns the copy already made for it.
+TilemapId cloneTilemap(LSContext::Impl& impl, TilemapId source, std::map<uint64_t, uint64_t>& made) {
+    if (!source.valid()) {
+        return TilemapId::null();
+    }
+    auto already = made.find(source.value);
+    if (already != made.end()) {
+        return TilemapId{ already->second };
+    }
+    const TilemapData* data = impl.findTilemap(source);
+    if (data == nullptr) {
+        return TilemapId::null();
+    }
+    const TilemapData copy = *data;
+    const TilemapId id = impl.mint<TilemapId>();
+    impl.tilemaps.emplace(id.value, copy);
+    if (DocumentData* document = impl.findDocument(copy.document)) {
+        document->tilemaps.push_back(id);
+    }
+    made.emplace(source.value, id.value);
+    return id;
+}
 
 } // namespace
 
@@ -1062,6 +1104,7 @@ VoidResult LSContext::setSpriteOrder(DocumentId doc, const std::vector<SpriteId>
 struct LSContext::LayerCloneTables {
     std::map<uint64_t, uint64_t> geometry;
     std::map<uint64_t, uint64_t> regions;
+    std::map<uint64_t, uint64_t> tilemaps;
     const std::map<uint64_t, uint64_t>* pivots     = nullptr;
     const std::map<uint64_t, uint64_t>* sockets    = nullptr;
     const std::map<uint64_t, uint64_t>* boundaries = nullptr;
@@ -1095,11 +1138,15 @@ Result<LayerId> LSContext::cloneLayerInto(LayerId source, SpriteId into, int32_t
         // yet.
         std::vector<GeometryId> heldGeometry;
         std::vector<RegionId>   heldRegions;
-        CollectHandles collector{ &heldGeometry, &heldRegions };
+        std::vector<TilemapId>  heldTilemaps;
+        CollectHandles collector{ &heldGeometry, &heldRegions, &heldTilemaps };
         reflect::visitOperation(collector, copy);
 
         for (RegionId held : heldRegions) {
             cloneRegion(*impl_, held, tables.geometry, tables.regions);
+        }
+        for (TilemapId held : heldTilemaps) {
+            cloneTilemap(*impl_, held, tables.tilemaps);
         }
         for (GeometryId held : heldGeometry) {
             cloneGeometry(*impl_, held, tables.geometry);
@@ -1108,6 +1155,7 @@ Result<LayerId> LSContext::cloneLayerInto(LayerId source, SpriteId into, int32_t
         CloneRemap remap;
         remap.geometry = &tables.geometry;
         remap.regions = &tables.regions;
+        remap.tilemaps = &tables.tilemaps;
         remap.pivots = tables.pivots;
         remap.sockets = tables.sockets;
         remap.boundaries = tables.boundaries;
@@ -2962,8 +3010,84 @@ VoidResult LSContext::constrainToPalette(RasterBuffer& buffer, PaletteId palette
 }
 
 // ---------------------------------------------------------------------------
-// SECTION 9: Patterns
+// SECTION 9: Patterns (and tilemaps)
 // ---------------------------------------------------------------------------
+
+namespace {
+bool validTilemap(const TilemapDesc& desc) {
+    return desc.columns > 0 && desc.rows > 0 && desc.tileWidth > 0 && desc.tileHeight > 0 &&
+           desc.columns <= 4096 && desc.rows <= 4096 &&
+           desc.cells.size() == static_cast<size_t>(desc.columns) * desc.rows;
+}
+} // namespace
+
+Result<TilemapId> LSContext::createTilemap(DocumentId doc, const TilemapDesc& desc) {
+    DocumentData* document = impl_->findDocument(doc);
+    if (document == nullptr) {
+        return Result<TilemapId>::err(LSError::InvalidId);
+    }
+    if (!validTilemap(desc)) {
+        return Result<TilemapId>::err(LSError::InvalidParameter);
+    }
+    const TilemapId id = impl_->mint<TilemapId>();
+    TilemapData data;
+    data.document = doc;
+    data.desc = desc;
+    impl_->tilemaps.emplace(id.value, std::move(data));
+    document->tilemaps.push_back(id);
+    return Result<TilemapId>::ok(id);
+}
+
+VoidResult LSContext::updateTilemap(TilemapId id, const TilemapDesc& desc) {
+    TilemapData* data = impl_->findTilemap(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (!validTilemap(desc)) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    data->desc = desc;
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
+
+VoidResult LSContext::setTilemapCell(TilemapId id, uint32_t column, uint32_t row, uint32_t cell) {
+    TilemapData* data = impl_->findTilemap(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (column >= data->desc.columns || row >= data->desc.rows) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
+    uint32_t& at = data->desc.cells[static_cast<size_t>(row) * data->desc.columns + column];
+    if (at != cell) {
+        at = cell;
+        impl_->markDirtyInternal(id.value);
+    }
+    return VoidResult::success();
+}
+
+Result<TilemapDesc> LSContext::getTilemap(TilemapId id) const {
+    const TilemapData* data = impl_->findTilemap(id);
+    if (data == nullptr) {
+        return Result<TilemapDesc>::err(LSError::InvalidId);
+    }
+    return Result<TilemapDesc>::ok(data->desc);
+}
+
+VoidResult LSContext::deleteTilemap(TilemapId id) {
+    TilemapData* data = impl_->findTilemap(id);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (DocumentData* doc = impl_->findDocument(data->document)) {
+        doc->tilemaps.erase(std::remove(doc->tilemaps.begin(), doc->tilemaps.end(), id),
+                            doc->tilemaps.end());
+    }
+    impl_->tilemaps.erase(id.value);
+    impl_->markDirtyInternal(id.value);
+    return VoidResult::success();
+}
 
 namespace {
 Result<PatternId> storePattern(LSContext::Impl& impl, DocumentId doc, PatternTileDesc desc) {

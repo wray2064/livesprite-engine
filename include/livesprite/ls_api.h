@@ -81,6 +81,28 @@ struct RampDesc {
 // A tile may also carry colours. When `colors` is populated it is a tileable
 // texture: a texture fill paints those colours directly instead of resolving
 // palette roles.
+// A tilemap: a grid of cells, each naming a tile and how it is turned. A
+// DrawTilemapOp draws one from a tileset sprite, whose layers are the tiles
+// -- tile 1 its first layer, drawn from its own top-left corner -- so a tile
+// is as live as any layer, and editing it changes every cell that names it.
+//
+// A cell is 0 for none, or a tile number from 1 in the low bits with the
+// flips above: the diagonal flip (x and y swapped, for square tiles) is done
+// first, then left-right, then top-bottom -- a quarter turn clockwise is the
+// diagonal and left-right together.
+constexpr uint32_t kTileIndexMask = 0x0FFFFFFFu;
+constexpr uint32_t kTileFlipX     = 1u << 28;
+constexpr uint32_t kTileFlipY     = 1u << 29;
+constexpr uint32_t kTileFlipD     = 1u << 30;
+
+struct TilemapDesc {
+    uint32_t              columns    = 0;
+    uint32_t              rows       = 0;
+    uint32_t              tileWidth  = 16;
+    uint32_t              tileHeight = 16;
+    std::vector<uint32_t> cells;        // columns * rows, row by row
+};
+
 struct PatternTileDesc {
     std::string          name;
     uint32_t             tileWidth  = 4;
@@ -666,6 +688,13 @@ public:
     // =======================================================================
     // SECTION 9: Dither and Pattern
     // =======================================================================
+
+    // --- Tilemaps (see TilemapDesc) ----------------------------------------
+    Result<TilemapId>   createTilemap(DocumentId doc, const TilemapDesc& desc);
+    VoidResult          updateTilemap(TilemapId id, const TilemapDesc& desc);
+    VoidResult          setTilemapCell(TilemapId id, uint32_t column, uint32_t row, uint32_t cell);
+    Result<TilemapDesc> getTilemap(TilemapId id) const;
+    VoidResult          deleteTilemap(TilemapId id);
 
     Result<PatternId>   createPattern(DocumentId doc, const PatternTileDesc& desc);
     VoidResult          deletePattern(PatternId id);

@@ -241,6 +241,19 @@ struct ClearRegionOp {
     RegionId        targetRegion;
 };
 
+// A tilemap drawn from a tileset sprite: each cell the tile it names -- that
+// sprite's layer, taken from its top-left tileWidth x tileHeight -- turned as
+// the cell says, the grid's top-left corner at `origin`. Over what the layer
+// has drawn so far, like a mark. Editing a tile's layer redraws every cell
+// that names it.
+struct DrawTilemapOp {
+    TilemapId       tilemap;
+    SpriteId        tileset;
+    Vec2f           origin          = {0.f, 0.f};
+    BlendMode       blend           = BlendMode::Normal;
+    float           opacity         = 1.f;
+};
+
 struct GenerateInnerOutlineOp {
     RegionId        targetRegion;
     float           thickness           = 1.f;
@@ -569,7 +582,8 @@ using Operation = std::variant<
     PluginOp,
     // Effects added later go last, so no earlier type moves.
     GenerateDropShadowOp,
-    ClearRegionOp
+    ClearRegionOp,
+    DrawTilemapOp
 >;
 
 // The same list again, in a form code can walk.
@@ -579,7 +593,7 @@ using Operation = std::variant<
 // rather than repeating the roll call. The static_assert below makes the two
 // lists a compile error if they ever disagree, so the duplication is checked
 // rather than trusted.
-#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp) X(GenerateDropShadowOp) X(ClearRegionOp)
+#define LS_OPERATION_TYPES(X)     X(FillSolidOp) X(FillGradientOp) X(FillRampOp) X(FillDitherOp)     X(FillNoiseOp) X(FillLinePatternOp) X(FillTexturePatternOp)     X(FillSemanticColorOp)     X(StrokePolylineOp) X(StrokeCurveOp) X(StrokeRegionBoundaryOp)     X(StrokeBrushOp) X(StrokePixelPathOp)     X(GenerateSilhouetteOutlineOp) X(GenerateInnerOutlineOp)     X(GenerateOuterOutlineOp) X(GenerateRegionOutlineOp)     X(GenerateMaterialBoundaryOutlineOp) X(CleanupOutlineOp)     X(JoinCornersOp) X(ResolveOutlineCollisionsOp)     X(TranslateOp) X(RotateOp) X(ScaleOp) X(MirrorOp) X(ShearOp)     X(SkewOp) X(SquashOp) X(StretchOp) X(MatrixTransformOp)     X(BendOp) X(WarpOp) X(LatticeDeformOp) X(EnvelopeDeformOp)     X(PinDeformOp) X(WeightedDeformOp) X(BoundaryDeformOp) X(PathDeformOp)     X(PluginOp) X(GenerateDropShadowOp) X(ClearRegionOp) X(DrawTilemapOp)
 
 #define LS_OP_COUNT_ONE(T) + 1
 static_assert(std::variant_size_v<Operation> == (0 LS_OPERATION_TYPES(LS_OP_COUNT_ONE)),

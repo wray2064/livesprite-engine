@@ -104,7 +104,7 @@ ls_context_destroy(ctx);
 
 ### Operations are named, not structured
 
-The C++ API has 41 operation structs. Mirroring them in C would mean 41 more
+The C++ API has 42 operation structs. Mirroring them in C would mean 42 more
 struct definitions, kept in step by hand, and a new operation would be a
 breaking ABI change every time.
 

@@ -2445,6 +2445,87 @@ Result<CompileResult> LSContext::compileLayerWithin(
             continue;
         }
 
+        // A tilemap: each cell the tile it names, from the tileset's layers.
+        if (const auto* draw = std::get_if<DrawTilemapOp>(&data->op)) {
+            const TilemapData* map = impl_->findTilemap(draw->tilemap);
+            const SpriteData* tileset = impl_->findSprite(draw->tileset);
+            if (map == nullptr || tileset == nullptr) {
+                env.note("op " + std::to_string(opId.value) + ": skipped DrawTilemapOp (missing input)");
+                continue;
+            }
+            const TilemapDesc& grid = map->desc;
+            const int32_t tw = static_cast<int32_t>(grid.tileWidth);
+            const int32_t th = static_cast<int32_t>(grid.tileHeight);
+            const int32_t ox = static_cast<int32_t>(std::floor(draw->origin.x + 0.5f));
+            const int32_t oy = static_cast<int32_t>(std::floor(draw->origin.y + 0.5f));
+            // Each tile compiled once, however many cells name it.
+            std::map<uint32_t, CompileResult> tiles;
+            const auto tile = [&](uint32_t index) -> const RasterBuffer* {
+                if (index == 0 || index > tileset->layers.size()) {
+                    return nullptr;
+                }
+                auto found = tiles.find(index);
+                if (found == tiles.end()) {
+                    auto compiled = compileLayerWithin(tileset->layers[index - 1], resolved,
+                                                       nullptr, false);
+                    if (compiled.fail()) {
+                        return nullptr;
+                    }
+                    found = tiles.emplace(index, std::move(compiled.value)).first;
+                }
+                return &found->second.raster;
+            };
+            IntervalSet covered;
+            for (uint32_t row = 0; row < grid.rows; ++row) {
+                for (uint32_t column = 0; column < grid.columns; ++column) {
+                    const uint32_t cell = grid.cells[static_cast<size_t>(row) * grid.columns + column];
+                    const RasterBuffer* source = tile(cell & kTileIndexMask);
+                    if (source == nullptr) {
+                        continue;
+                    }
+                    const bool diagonal = (cell & kTileFlipD) != 0 && tw == th;
+                    for (int32_t v = 0; v < th; ++v) {
+                        const int32_t y = oy + static_cast<int32_t>(row) * th + v;
+                        if (y < 0 || y >= static_cast<int32_t>(result.raster.height)) {
+                            continue;
+                        }
+                        int32_t runStart = -1;
+                        for (int32_t u = 0; u <= tw; ++u) {
+                            const int32_t x = ox + static_cast<int32_t>(column) * tw + u;
+                            bool drawn = false;
+                            if (u < tw && x >= 0 && x < static_cast<int32_t>(result.raster.width)) {
+                                // Back from the cell to the tile: the flips
+                                // undone, then the diagonal.
+                                int32_t su = (cell & kTileFlipX) != 0 ? tw - 1 - u : u;
+                                int32_t sv = (cell & kTileFlipY) != 0 ? th - 1 - v : v;
+                                if (diagonal) {
+                                    std::swap(su, sv);
+                                }
+                                const Color c = getRasterPixel(*source, su, sv);
+                                if (c.a != 0) {
+                                    setRasterPixel(result.raster, x, y,
+                                                   blendPixel(getRasterPixel(result.raster, x, y), c,
+                                                              draw->blend, draw->opacity));
+                                    drawn = true;
+                                }
+                            }
+                            if (drawn && runStart < 0) {
+                                runStart = x;
+                            } else if (!drawn && runStart >= 0) {
+                                covered.intervals.push_back({ y, runStart, x });
+                                runStart = -1;
+                            }
+                        }
+                    }
+                }
+            }
+            covered = geom::normalize(std::move(covered));
+            stampTags(covered, 0);
+            env.note("op " + std::to_string(opId.value) + ": drew a tilemap over " +
+                     std::to_string(geom::pixelCount(covered)) + " px");
+            continue;
+        }
+
         // An erase: what is drawn so far goes, inside the region.
         if (const auto* clear = std::get_if<ClearRegionOp>(&data->op)) {
             const IntervalSet* coverage = regionCoverage(env, clear->targetRegion);

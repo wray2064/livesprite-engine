@@ -46,6 +46,7 @@ struct DocumentData {
     std::vector<PaletteId>  palettes;
     std::vector<RampId>     ramps;
     std::vector<PatternId>  patterns;
+    std::vector<TilemapId>  tilemaps;
 };
 
 struct SpriteData {
@@ -158,6 +159,11 @@ struct PatternData {
     PatternTileDesc desc;
 };
 
+struct TilemapData {
+    DocumentId      document;
+    TilemapDesc     desc;
+};
+
 struct PivotData {
     SpriteId    sprite;
     Vec2f       position;
@@ -252,6 +258,7 @@ struct DocumentState {
     std::map<uint64_t, PaletteData>   palettes;
     std::map<uint64_t, RampData>      ramps;
     std::map<uint64_t, PatternData>   patterns;
+    std::map<uint64_t, TilemapData>   tilemaps;
     std::map<uint64_t, PivotData>     pivots;
     std::map<uint64_t, SocketData>    sockets;
     std::map<uint64_t, BoundaryData>  boundaries;
@@ -284,6 +291,7 @@ struct LSContext::Impl {
     std::unordered_map<uint64_t, PaletteData>   palettes;
     std::unordered_map<uint64_t, RampData>      ramps;
     std::unordered_map<uint64_t, PatternData>   patterns;
+    std::unordered_map<uint64_t, TilemapData>   tilemaps;
     std::unordered_map<uint64_t, PivotData>     pivots;
     std::unordered_map<uint64_t, SocketData>    sockets;
     std::unordered_map<uint64_t, BoundaryData>  boundaries;
@@ -324,6 +332,7 @@ struct LSContext::Impl {
     PaletteData*   findPalette(PaletteId id);
     RampData*      findRamp(RampId id);
     PatternData*   findPattern(PatternId id);
+    TilemapData*   findTilemap(TilemapId id);
     PivotData*     findPivot(PivotId id);
     SocketData*    findSocket(SocketId id);
     BoundaryData*  findBoundary(BoundaryId id);
@@ -338,6 +347,7 @@ struct LSContext::Impl {
     const PaletteData*   findPalette(PaletteId id) const;
     const RampData*      findRamp(RampId id) const;
     const PatternData*   findPattern(PatternId id) const;
+    const TilemapData*   findTilemap(TilemapId id) const;
     const PivotData*     findPivot(PivotId id) const;
     const SocketData*    findSocket(SocketId id) const;
     const BoundaryData*  findBoundary(BoundaryId id) const;

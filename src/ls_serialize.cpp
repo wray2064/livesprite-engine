@@ -755,6 +755,23 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
     }
     root["patterns"] = std::move(patterns);
 
+    json::Value tilemaps = json::Value::array();
+    for (TilemapId tilemapId : doc.tilemaps) {
+        const TilemapData* data = impl.findTilemap(tilemapId);
+        if (data == nullptr) {
+            continue;
+        }
+        json::Value obj = json::Value::object();
+        obj["id"] = enc(tilemapId);
+        obj["columns"] = enc(data->desc.columns);
+        obj["rows"] = enc(data->desc.rows);
+        obj["tileWidth"] = enc(data->desc.tileWidth);
+        obj["tileHeight"] = enc(data->desc.tileHeight);
+        obj["cells"] = enc(data->desc.cells);
+        tilemaps.push(std::move(obj));
+    }
+    root["tilemaps"] = std::move(tilemaps);
+
     json::Value spriteArray = json::Value::array();
     for (SpriteId spriteId : sprites) {
         const SpriteData* data = impl.findSprite(spriteId);
@@ -785,6 +802,7 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
     for (PaletteId id : doc.palettes)   { includeMetadata(id.value); }
     for (RampId id : doc.ramps)         { includeMetadata(id.value); }
     for (PatternId id : doc.patterns)   { includeMetadata(id.value); }
+    for (TilemapId id : doc.tilemaps)   { includeMetadata(id.value); }
     for (SpriteId spriteId : sprites) {
         includeMetadata(spriteId.value);
         const SpriteData* sprite = impl.findSprite(spriteId);
@@ -829,7 +847,7 @@ void collectIds(const json::Value& root, std::vector<uint64_t>& out) {
     if (const json::Value* document = root.find("document")) {
         pushId(*document);
     }
-    for (const char* key : {"geometry", "regions", "palettes", "ramps", "patterns"}) {
+    for (const char* key : {"geometry", "regions", "palettes", "ramps", "patterns", "tilemaps"}) {
         if (const json::Value* list = root.find(key)) {
             for (const json::Value& item : list->items()) {
                 pushId(item);
@@ -987,7 +1005,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
     {
         std::set<std::string> consumed {
             "format", "engineVersion", "document", "geometry", "regions",
-            "palettes", "ramps", "patterns", "sprites", "metadata"
+            "palettes", "ramps", "patterns", "tilemaps", "sprites", "metadata"
         };
         const std::string unknown = collectUnknown(root, consumed);
         if (!unknown.empty()) {
@@ -1143,6 +1161,29 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             reader.field("colors", pattern.desc.colors);
             impl.patterns.emplace(id, std::move(pattern));
             stored.patterns.push_back(PatternId{id});
+        }
+    }
+
+    // --- tilemaps ---------------------------------------------------------
+    if (const json::Value* list = root.find("tilemaps")) {
+        for (const json::Value& item : list->items()) {
+            const uint64_t id = mapped(item);
+            if (id == 0) {
+                continue;
+            }
+            TilemapData tilemap;
+            tilemap.document = DocumentId{docId};
+            std::set<std::string> consumed {"id"};
+            Reader reader{&item, ctx, &consumed};
+            reader.field("columns", tilemap.desc.columns);
+            reader.field("rows", tilemap.desc.rows);
+            reader.field("tileWidth", tilemap.desc.tileWidth);
+            reader.field("tileHeight", tilemap.desc.tileHeight);
+            reader.field("cells", tilemap.desc.cells);
+            // A grid the file got wrong is made whole rather than read out of bounds.
+            tilemap.desc.cells.resize(static_cast<size_t>(tilemap.desc.columns) * tilemap.desc.rows, 0u);
+            impl.tilemaps.emplace(id, std::move(tilemap));
+            stored.tilemaps.push_back(TilemapId{id});
         }
     }
 
@@ -1415,6 +1456,12 @@ Result<SpriteId> LSContext::deserializeSprite(DocumentId into, const SerializedD
             pattern->document = into;
         }
         target->patterns.push_back(id);
+    }
+    for (TilemapId id : source->tilemaps) {
+        if (TilemapData* tilemap = impl_->findTilemap(id)) {
+            tilemap->document = into;
+        }
+        target->tilemaps.push_back(id);
     }
     for (SpriteId id : source->sprites) {
         if (SpriteData* sprite = impl_->findSprite(id)) {

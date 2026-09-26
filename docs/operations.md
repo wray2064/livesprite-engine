@@ -1,6 +1,6 @@
 # Operations
 
-The 41 operation types, what each one does, and the parameters worth knowing.
+The 42 operation types, what each one does, and the parameters worth knowing.
 Full field lists are in [`ls_operations.h`](../include/livesprite/ls_operations.h);
 at runtime, `describeOperation(id)` reports every drivable parameter and its
 type.
@@ -73,6 +73,16 @@ from straddling two columns. A `strokePattern` thins the mark along its length.
 
 An eraser that works on shapes without baking them: the erased pixels are a
 region like any other, grown and shrunk by the same calls.
+
+## Tilemaps
+
+| Operation | What it does |
+|---|---|
+| `DrawTilemapOp` | Draws a tilemap -- a grid of cells made with `createTilemap` -- from a tileset sprite whose layers are the tiles (tile 1 its first layer, taken from its top-left `tileWidth` x `tileHeight`), each cell turned by its flip bits, the grid's corner at `origin`. Editing a tile's layer redraws every cell that names it; a cloned layer gets a grid of its own |
+
+A cell is 0 for none or a tile number from 1 with `kTileFlipD` (x and y
+swapped, done first), `kTileFlipX` and `kTileFlipY` above it; a quarter turn
+clockwise is D and X together. `setTilemapCell` changes one cell.
 
 ## Outlines
 

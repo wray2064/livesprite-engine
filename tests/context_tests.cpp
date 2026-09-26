@@ -453,6 +453,100 @@ void testClearRegion(LSContext& ctx) {
     LS_CHECK(readPixel(compiled.value.raster, 5, 4).a == 0);
 }
 
+// A tilemap: cells drawn from a tileset's layers, turned as each cell says;
+// editing a tile redraws every cell naming it; a snapshot holds the grid; a
+// cloned layer gets a grid of its own; saving and loading keep it all.
+void testTilemap(LSContext& ctx) {
+    auto doc = ctx.createDocument({"tiles", 16, 8});
+    auto tileset = ctx.createSprite(doc.value);
+    auto frame = ctx.createSprite(doc.value);
+    const auto dot = [&](LayerId layer, Vec2i at, Color colour) {
+        PixelRegionDesc desc;
+        desc.pixels.push_back({at, colour});
+        FillSolidOp fill;
+        fill.targetRegion = ctx.createRegionFromPixels(doc.value, desc).value;
+        fill.fallbackColor = colour;
+        return ctx.addOperation(layer, fill).ok();
+    };
+    const Color red {200, 30, 30, 255};
+    const Color blue {30, 30, 200, 255};
+    const Color green {30, 200, 30, 255};
+    auto t1 = ctx.createLayer(tileset.value, {"t1"});
+    auto t2 = ctx.createLayer(tileset.value, {"t2"});
+    LS_REQUIRE(dot(t1.value, {0, 0}, red));
+    LS_REQUIRE(dot(t2.value, {3, 0}, blue));
+    LS_REQUIRE(dot(t2.value, {1, 0}, green));
+
+    TilemapDesc grid;
+    grid.columns = 4;
+    grid.rows = 2;
+    grid.tileWidth = 4;
+    grid.tileHeight = 4;
+    grid.cells = { 1, 2 | kTileFlipX, 0, 2 | kTileFlipD,
+                   0, 0, 0, 0 };
+    auto map = ctx.createTilemap(doc.value, grid);
+    LS_REQUIRE(map.ok());
+    auto layer = ctx.createLayer(frame.value, {"map"});
+    DrawTilemapOp draw;
+    draw.tilemap = map.value;
+    draw.tileset = tileset.value;
+    LS_REQUIRE(ctx.addOperation(layer.value, draw).ok());
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 16;
+    profile.outputHeight = 8;
+    const auto at = [&](int x, int y) {
+        auto compiled = ctx.compileSprite(frame.value, profile);
+        return compiled.ok() ? readPixel(compiled.value.raster, x, y) : Color{};
+    };
+    LS_CHECK(at(0, 0).r == 200);                          // tile 1 as drawn
+    LS_CHECK(at(4, 0).b == 200 && at(6, 0).g == 200);     // tile 2 mirrored: blue 3 -> 0, green 1 -> 2
+    LS_CHECK(at(7, 0).a == 0);
+    LS_CHECK(at(8, 0).a == 0);                            // an empty cell
+    LS_CHECK(at(12, 3).b == 200 && at(12, 1).g == 200);   // diagonal: (3,0) -> (0,3), (1,0) -> (0,1)
+
+    // One cell set; a tile edited redraws every cell that names it.
+    LS_REQUIRE(ctx.setTilemapCell(map.value, 2, 0, 1).ok());
+    LS_CHECK(at(8, 0).r == 200);
+    LS_REQUIRE(dot(t1.value, {1, 1}, green));
+    LS_CHECK(at(1, 1).g == 200 && at(9, 1).g == 200);
+
+    // A snapshot holds the grid.
+    auto before = ctx.snapshotDocumentState(doc.value);
+    LS_REQUIRE(before.ok());
+    LS_REQUIRE(ctx.setTilemapCell(map.value, 0, 0, 0).ok());
+    LS_CHECK(at(0, 0).a == 0);
+    LS_REQUIRE(ctx.restoreDocumentState(doc.value, before.value).ok());
+    LS_CHECK(at(0, 0).r == 200);
+
+    // A clone has its own grid: changing it leaves the original.
+    auto copy = ctx.cloneLayer(layer.value, frame.value);
+    LS_REQUIRE(copy.ok());
+    auto copyOps = ctx.getLayerOperations(copy.value);
+    LS_REQUIRE(copyOps.ok() && copyOps.value.size() == 1);
+    auto copyMap = ctx.getOperationParameter(copyOps.value[0].id, "tilemap");
+    const uint64_t* copyId = copyMap.ok() ? std::get_if<uint64_t>(&copyMap.value) : nullptr;
+    LS_REQUIRE(copyId != nullptr && *copyId != map.value.value);
+    LS_REQUIRE(ctx.setTilemapCell(TilemapId{*copyId}, 3, 1, 1).ok());
+    auto original = ctx.getTilemap(map.value);
+    LS_CHECK(original.ok() && original.value.cells[7] == 0);
+
+    // Saved and loaded: the same picture.
+    const Color beforeSave = at(12, 3);
+    auto saved = ctx.serializeDocument(doc.value);
+    LS_REQUIRE(saved.ok());
+    auto loaded = ctx.deserializeDocument(saved.value);
+    LS_REQUIRE(loaded.ok());
+    auto info = ctx.getDocumentInfo(loaded.value);
+    LS_REQUIRE(info.ok() && info.value.sprites.size() == 2);
+    auto reloaded = ctx.compileSprite(info.value.sprites[1], profile);
+    LS_REQUIRE(reloaded.ok());
+    LS_CHECK(readPixel(reloaded.value.raster, 0, 0).r == 200);
+    LS_CHECK(readPixel(reloaded.value.raster, 12, 3).b == beforeSave.b);
+    LS_CHECK(readPixel(reloaded.value.raster, 12, 4).r == 200);   // the clone's cell
+}
+
 // A drop shadow: the layer's own drawing, moved and in one colour, only where
 // the layer draws nothing -- following the drawing when it changes.
 void testDropShadow(LSContext& ctx) {
@@ -552,6 +646,7 @@ int main() {
     testReferenceLayers(*ctx);
     testDropShadow(*ctx);
     testClearRegion(*ctx);
+    testTilemap(*ctx);
     testRotSprite(*ctx);
 
     return lstest::report("context");

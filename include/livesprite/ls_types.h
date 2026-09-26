@@ -133,6 +133,7 @@ struct TagPattern   {};
 struct TagPivot     {};
 struct TagSocket    {};
 struct TagBoundary  {};
+struct TagTilemap   {};
 
 using DocumentId  = TypedId<TagDocument>;
 using SpriteId    = TypedId<TagSprite>;
@@ -147,6 +148,7 @@ using PatternId   = TypedId<TagPattern>;
 using PivotId     = TypedId<TagPivot>;
 using SocketId    = TypedId<TagSocket>;
 using BoundaryId  = TypedId<TagBoundary>;
+using TilemapId   = TypedId<TagTilemap>;
 
 // Semantic color role — index into a palette (not a raw color)
 using ColorRole = uint32_t;
