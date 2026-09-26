@@ -1118,24 +1118,17 @@ IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& mo
 
 // A wall of a face (see FaceDesc::walls) where the move lands it: its shape,
 // moved and rasterized. A face named as a wall is its area, so two faces that
-// close each other in do not go round in a circle; `face` says it was one.
-IntervalSet wallThrough(const CompileEnv& env, const RegionClipTerm& wall, const MarkMove& move,
-                        bool* face) {
-    *face = false;
+// close each other in do not go round in a circle.
+IntervalSet wallThrough(const CompileEnv& env, const RegionClipTerm& wall, const MarkMove& move) {
     if (const RegionData* region = env.impl->findRegion(wall.region)) {
         const GeometryData* source = env.impl->findGeometry(region->source);
         if (source != nullptr && std::holds_alternative<FaceDesc>(source->shape)) {
-            *face = true;
             return geometryThrough(env, *source, move);
         }
         return regionThrough(env, wall.region, move, nullptr);
     }
     const GeometryData* shape = env.impl->findGeometry(wall.geometry);
-    if (shape == nullptr) {
-        return {};
-    }
-    *face = std::holds_alternative<FaceDesc>(shape->shape);
-    return geometryThrough(env, *shape, move);
+    return shape == nullptr ? IntervalSet{} : geometryThrough(env, *shape, move);
 }
 
 // A face where a move lands it (see FaceDesc): found again, by a flood from
@@ -1150,54 +1143,75 @@ IntervalSet faceThrough(const CompileEnv& env, const FaceDesc& face, const MarkM
     if ((move.affine() && geom::keepsPixelGrid(move.matrix)) || area.empty()) {
         return area;
     }
-    // Named walls: each part of the face found again between them, drawn
-    // through the same move -- up to a line however it was redrawn, taking
-    // what lies within two pixels of its own area. A part whose flood gets
-    // more than two pixels past it, and past every face beside it, has
-    // nothing closing it in on some side, and is its area, less the walls.
+    // Named walls: the face found again between them, drawn through the same
+    // move. What lies outside them is what can be reached from beyond them
+    // without crossing one. A face whose heart is out there has nothing
+    // closing it in, and is its area, less the walls. Otherwise it is every
+    // piece the walls leave of it, each taken up to the walls round it and
+    // within two pixels of its own area -- and nothing outside the walls,
+    // so a line redrawn across its edge keeps it in.
     static thread_local int depth = 0;
     if (!face.walls.empty() && depth < 8) {
         ++depth;
         IntervalSet walls;
-        IntervalSet besides;              // the faces among the walls
         for (const RegionClipTerm& wall : face.walls) {
-            bool isFace = false;
-            const IntervalSet drawn = wallThrough(env, wall, move, &isFace);
-            walls = geom::unionSets(walls, drawn);
-            if (isFace) {
-                besides = geom::unionSets(besides, drawn);
-            }
+            walls = geom::unionSets(walls, wallThrough(env, wall, move));
         }
         --depth;
+        const Rect2i box = geom::bounds(geom::unionSets(walls, geom::expand(area, 3.f, true)));
+        const Rect2i frame { { box.min.x - 1, box.min.y - 1 }, { box.max.x + 1, box.max.y + 1 } };
+        IntervalSet outside;
+        for (IntervalSet& piece : geom::connectedComponents(
+                 geom::subtractSets(geom::invertSet(IntervalSet{}, frame), walls), face.diagonal)) {
+            const Rect2i reach = geom::bounds(piece);
+            if (reach.min.x <= frame.min.x || reach.min.y <= frame.min.y ||
+                reach.max.x >= frame.max.x || reach.max.y >= frame.max.y) {
+                outside = geom::unionSets(outside, piece);
+            }
+        }
+        // Its parts, each walled in or out there. A part out there within two
+        // pixels of one walled in is a sliver of that one cut off by a line
+        // redrawn across it, and goes.
+        struct Part {
+            IntervalSet area;
+            IntervalSet open;
+            bool        out = false;
+        };
+        std::vector<Part> parts;
+        IntervalSet walledIn;
+        for (IntervalSet& piece : geom::connectedComponents(area, false)) {
+            Part part;
+            part.open = geom::subtractSets(piece, walls);
+            if (part.open.empty()) {
+                continue;
+            }
+            const Vec2f deep = geom::deepestPoint(part.open);
+            part.out = geom::contains(outside, { static_cast<int32_t>(std::floor(deep.x)),
+                                                 static_cast<int32_t>(std::floor(deep.y)) });
+            part.area = std::move(piece);
+            if (!part.out) {
+                walledIn = geom::unionSets(walledIn, part.area);
+            }
+            parts.push_back(std::move(part));
+        }
         IntervalSet out;
-        for (const IntervalSet& part : geom::connectedComponents(area, false)) {
-            const IntervalSet open = geom::subtractSets(part, walls);
-            if (open.empty()) {
+        for (const Part& each : parts) {
+            const IntervalSet& part = each.area;
+            const IntervalSet& open = each.open;
+            if (each.out) {
+                if (geom::intersectSets(geom::expand(part, 2.f, true), walledIn).empty()) {
+                    out = geom::unionSets(out, open);
+                }
                 continue;
             }
             const IntervalSet reach = geom::expand(part, 2.f, true);
             const IntervalSet limit = geom::subtractSets(geom::expand(part, 3.f, true), walls);
-            const IntervalSet near = geom::expand(geom::unionSets(part, besides), 2.f, true);
-            const Vec2f deep = geom::deepestPoint(open);
-            const Vec2i seed { static_cast<int32_t>(std::floor(deep.x)),
-                               static_cast<int32_t>(std::floor(deep.y)) };
-            // Every piece the walls leave of it, each up to the walls round it;
-            // a piece that gets out past them is outside a line that was redrawn
-            // across it, and goes -- unless it is the heart of the face, which
-            // then has nothing closing it in.
-            IntervalSet found;
-            bool heartOpen = false;
             for (const IntervalSet& piece : geom::connectedComponents(limit, face.diagonal)) {
-                if (geom::intersectSets(piece, open).empty()) {
-                    continue;
-                }
-                if (geom::subtractSets(piece, near).empty()) {
-                    found = geom::unionSets(found, geom::intersectSets(piece, reach));
-                } else if (geom::contains(piece, seed)) {
-                    heartOpen = true;
+                if (!geom::intersectSets(piece, open).empty()) {
+                    out = geom::unionSets(out, geom::subtractSets(
+                        geom::intersectSets(piece, reach), outside));
                 }
             }
-            out = geom::unionSets(out, heartOpen || found.empty() ? open : found);
         }
         return out;
     }
