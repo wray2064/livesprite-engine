@@ -386,14 +386,18 @@ void testRoundingPolicies() {
 void testSamplingPolicies() {
     auto ctx = LSContext::create();
 
+    // Sampling is how pixels are resampled, so the bands are pixels: shapes
+    // are moved as shapes and rasterized where they land, never sampled.
     auto sampled = [&](SamplingPolicy sampling) {
         const Stage stage = makeStage(*ctx);
         // Three bands, so median and majority can disagree.
         const Color bands[3] = { {40, 40, 40, 255}, {130, 130, 130, 255}, {230, 230, 230, 255} };
         for (int i = 0; i < 3; ++i) {
-            const GeometryId rect = ctx->createRect(
-                stage.doc, {{10.f, 10.f + static_cast<float>(i) * 4.f}, 16.f, 4.f, 0.f}).value;
-            const RegionId region = ctx->createRegionFromGeometry(rect).value;
+            IntervalSet band;
+            for (int32_t y = 10 + i * 4; y < 14 + i * 4; ++y) {
+                band.intervals.push_back({ y, 10, 26 });
+            }
+            const RegionId region = ctx->createRegionFromIntervals(stage.doc, band).value;
             FillSolidOp fill;
             fill.targetRegion = region;
             fill.fallbackColor = bands[i];

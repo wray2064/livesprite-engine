@@ -712,6 +712,114 @@ IntervalSet LSContext::Impl::rasterizeGeometry(const GeometryData& data) const {
     }, data.shape);
 }
 
+namespace {
+
+// An ellipse's edge as a polygon fine enough that no pixel can tell: two
+// points for every pixel of its circumference.
+std::vector<Vec2f> ellipseOutline(Vec2f center, float radiusX, float radiusY) {
+    const float around = 6.28318530718f * std::max(radiusX, radiusY);
+    const int steps = std::max(16, std::min(4096, static_cast<int>(std::ceil(around * 2.f))));
+    std::vector<Vec2f> points;
+    points.reserve(static_cast<size_t>(steps));
+    for (int i = 0; i < steps; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(steps) * 6.28318530718f;
+        points.push_back({ center.x + math::cosf(t) * radiusX, center.y + math::sinf(t) * radiusY });
+    }
+    return points;
+}
+
+// A rectangle's edge, its rounded corners as quarter ellipses.
+std::vector<Vec2f> rectOutline(const RectDesc& rect) {
+    const float left = rect.origin.x;
+    const float top = rect.origin.y;
+    const float right = rect.origin.x + rect.width;
+    const float bottom = rect.origin.y + rect.height;
+    const float radius = std::max(0.f, std::min(rect.cornerRadius,
+                                                std::min(rect.width, rect.height) * 0.5f));
+    if (radius <= 0.f) {
+        return { { left, top }, { right, top }, { right, bottom }, { left, bottom } };
+    }
+    std::vector<Vec2f> points;
+    const int steps = std::max(4, static_cast<int>(std::ceil(radius * 3.f)));
+    const Vec2f centres[4] = { { right - radius, top + radius }, { right - radius, bottom - radius },
+                               { left + radius, bottom - radius }, { left + radius, top + radius } };
+    const float starts[4] = { -1.5707963f, 0.f, 1.5707963f, 3.1415927f };
+    for (int corner = 0; corner < 4; ++corner) {
+        for (int i = 0; i <= steps; ++i) {
+            const float t = starts[corner] + 1.5707963f * static_cast<float>(i) / static_cast<float>(steps);
+            points.push_back({ centres[corner].x + math::cosf(t) * radius,
+                               centres[corner].y + math::sinf(t) * radius });
+        }
+    }
+    return points;
+}
+
+} // namespace
+
+IntervalSet LSContext::Impl::rasterizeGeometryThrough(const GeometryData& data,
+                                                     const Mat3f& matrix) const {
+    // A move that keeps the pixel grid carries the shape's own pixels across,
+    // so a quarter turn or a whole-pixel move is exactly the drawing, moved.
+    if (geom::keepsPixelGrid(matrix)) {
+        return geom::mapAcrossGrid(rasterizeGeometry(data), matrix);
+    }
+    const auto moved = [&matrix](std::vector<Vec2f> points) {
+        for (Vec2f& p : points) {
+            p = matrix.transformPoint(p);
+        }
+        return points;
+    };
+    return std::visit([&](const auto& shape) -> IntervalSet {
+        using Shape = std::decay_t<decltype(shape)>;
+        if constexpr (std::is_same_v<Shape, PointDesc>) {
+            return geom::rasterizePoint({ matrix.transformPoint(shape.position) });
+        } else if constexpr (std::is_same_v<Shape, LineDesc>) {
+            return geom::rasterizePixelWalk(moved({ shape.start, shape.end }), false);
+        } else if constexpr (std::is_same_v<Shape, PolylineDesc>) {
+            if (shape.closed && shape.points.size() >= 3) {
+                const std::vector<Vec2f> points = moved(shape.points);
+                return geom::unionSets(geom::rasterizeArea(points),
+                                       geom::rasterizePixelWalk(points, true));
+            }
+            return geom::rasterizePixelWalk(moved(shape.points), false);
+        } else if constexpr (std::is_same_v<Shape, RectDesc>) {
+            if (shape.width <= 0.f || shape.height <= 0.f) {
+                return IntervalSet{};
+            }
+            return geom::rasterizeArea(moved(rectOutline(shape)));
+        } else if constexpr (std::is_same_v<Shape, EllipseDesc>) {
+            if (shape.radiusX <= 0.f || shape.radiusY <= 0.f) {
+                return IntervalSet{};
+            }
+            return geom::rasterizeArea(moved(ellipseOutline(shape.center, shape.radiusX,
+                                                            shape.radiusY)), true);
+        } else if constexpr (std::is_same_v<Shape, CircleDesc>) {
+            if (shape.radius <= 0.f) {
+                return IntervalSet{};
+            }
+            return geom::rasterizeArea(moved(ellipseOutline(shape.center, shape.radius,
+                                                            shape.radius)), true);
+        } else if constexpr (std::is_same_v<Shape, PolygonDesc>) {
+            const std::vector<Vec2f> points = moved(shape.vertices);
+            IntervalSet area = geom::rasterizeArea(points);
+            if (shape.includeEdges && !points.empty()) {
+                area = geom::unionSets(area, geom::rasterizePixelWalk(points, true));
+            }
+            return area;
+        } else {
+            const std::vector<Vec2f> path = moved(geom::flattenCurve(shape));
+            if (path.size() < 2) {
+                return path.empty() ? IntervalSet{} : geom::rasterizePoint({ path.front() });
+            }
+            if (shape.closed) {
+                return geom::unionSets(geom::rasterizeArea(path),
+                                       geom::rasterizePixelWalk(path, true));
+            }
+            return geom::rasterizePixelWalk(path, false);
+        }
+    }, data.shape);
+}
+
 std::vector<Vec2f> LSContext::Impl::geometryPath(const GeometryData& data) const {
     return std::visit([](const auto& shape) -> std::vector<Vec2f> {
         using Shape = std::decay_t<decltype(shape)>;

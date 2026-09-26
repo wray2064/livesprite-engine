@@ -932,8 +932,21 @@ CompileProfile LSContext::Impl::resolveProfileDefaults(const CompileProfile& pro
 
 namespace {
 
+// How one mark moves when a layer is compiled geometry first (see
+// planGeometric): from the layer's own space to the output, through every
+// transform after it.
+struct MarkMove {
+    Mat3f matrix;
+    Mat3f inverse;
+    SamplingPolicy sampling = SamplingPolicy::Center;   // used only for pixel regions
+    bool moves = false;
+};
+
 struct CompileEnv {
     const LSContext::Impl* impl = nullptr;
+    // Set while a moving mark is resolved: its shapes are moved and then
+    // rasterized, rather than rasterized where they were drawn.
+    const MarkMove* move = nullptr;
     CompileProfile profile;
     DocumentId doc;
     SpriteId sprite;
@@ -999,6 +1012,37 @@ Vec2f spaceOrigin(const CompileEnv& env, CoordinateSpace space, const IntervalSe
 const IntervalSet* regionCoverage(const CompileEnv& env, RegionId id) {
     const RegionData* region = env.impl->findRegion(id);
     return region == nullptr ? nullptr : &region->coverage;
+}
+
+// A region where a move lands it. A region made from a shape is the shape,
+// moved and then rasterized. A region that is pixels -- what a document still
+// holds as pixels -- has no shape to move, so its coverage is moved as a
+// picture of itself, with the transform's own sampling: the one place a
+// picture is still resampled, and only until those pixels become shapes.
+IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& move) {
+    const RegionData* region = env.impl->findRegion(id);
+    if (region == nullptr) {
+        return {};
+    }
+    if (const GeometryData* geometry = env.impl->findGeometry(region->source)) {
+        return env.impl->rasterizeGeometryThrough(*geometry, move.matrix);
+    }
+    if (geom::keepsPixelGrid(move.matrix)) {
+        return geom::mapAcrossGrid(region->coverage, move.matrix);
+    }
+    auto allocated = allocateRaster(env.profile.outputWidth, env.profile.outputHeight);
+    if (allocated.fail()) {
+        return {};
+    }
+    RasterBuffer mask = std::move(allocated.value);
+    for (const Interval& interval : region->coverage.intervals) {
+        for (int32_t x = interval.x0; x < interval.x1; ++x) {
+            setRasterPixel(mask, x, interval.y, Color::white());
+        }
+    }
+    const RasterBuffer moved = transformRaster(mask, move.matrix, move.sampling,
+                                               env.profile.coverageThreshold);
+    return geom::maskToIntervals(moved, 0.5f);
 }
 
 // A ramp with every stop turned into the colour it means under the palette in
@@ -1187,6 +1231,15 @@ Color ditherRampColor(const ResolvedRamp& ramp, float value, float threshold) {
     return fraction > threshold ? stops[lower + 1].color : stops[lower].color;
 }
 
+// Where a patterned fill is evaluated: the origin its lattice counts from,
+// and -- for a fill that has one -- the axis of its gradient, stated from that
+// origin.
+struct PatternFrame {
+    Vec2f origin;
+    Vec2f start;
+    Vec2f end;
+};
+
 // A mark: coverage plus a per-pixel colour function, ready to composite.
 //
 // A patterned mark also records how it is anchored. Local marks are finished at
@@ -1200,8 +1253,11 @@ struct Mark {
     float opacity = 1.f;
 
     PatternAnchor anchor = PatternAnchor::Local;
-    Vec2f patternOrigin;
-    std::function<Color(int32_t, int32_t, Vec2f)> evaluateAt;   // set when anchor is not Local
+    PatternFrame frame;
+    // The colour at a sample point -- a pixel centre, in whatever space the
+    // frame is stated in. Set for patterned fills, so the pattern can be
+    // worked out wherever the mark finally lands.
+    std::function<Color(float, float, const PatternFrame&)> evaluateAt;
 };
 
 // Where a pattern lattice is pinned.
@@ -1210,12 +1266,11 @@ Vec2f patternOriginFor(const CompileEnv& env, PatternAnchor anchor, CoordinateSp
     switch (anchor) {
         case PatternAnchor::Local:
             return spaceOrigin(env, space, coverage);
-        case PatternAnchor::Global: {
-            // Travels with the object: the origin starts on the shape and is
-            // carried through each transform, while the lattice axes stay put.
-            const Rect2i box = geom::bounds(coverage);
-            return { static_cast<float>(box.min.x), static_cast<float>(box.min.y) };
-        }
+        case PatternAnchor::Global:
+            // Starts where the coordinate space says, as a Local one does; what
+            // differs is how it moves. It is carried through each transform
+            // while the lattice axes stay level with the canvas.
+            return spaceOrigin(env, space, coverage);
         case PatternAnchor::Fixed:
         default:
             return { 0.f, 0.f };
@@ -1839,6 +1894,25 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
     auto coverageOf = [&](RegionId region) -> const IntervalSet* {
         return regionCoverage(env, region);
     };
+    // Where a mark's pixels land. As drawn; or, for a moving mark, its shape
+    // moved and then rasterized. Its pattern's frame is still worked out from
+    // the region as drawn (coverageOf), so the move carries the frame too.
+    auto placed = [&](RegionId region, const IntervalSet& drawn) {
+        return env.move == nullptr ? drawn : regionThrough(env, region, *env.move);
+    };
+    auto placedPoints = [&](std::vector<Vec2f> points) {
+        if (env.move != nullptr) {
+            for (Vec2f& p : points) {
+                p = env.move->matrix.transformPoint(p);
+            }
+        }
+        return points;
+    };
+    // How much a move stretches a width: the square root of the area it
+    // scales by, so a turn keeps a line as wide as it was.
+    const float placedScale = env.move == nullptr
+        ? 1.f
+        : std::sqrt(std::fabs(env.move->matrix.determinant()));
 
     if (const auto* fill = std::get_if<FillSolidOp>(&op)) {
         const IntervalSet* coverage = coverageOf(fill->targetRegion);
@@ -1847,7 +1921,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         }
         const Color color = env.roleForRegion(fill->paletteRole, fill->targetRegion,
                                               fill->fallbackColor);
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
@@ -1860,7 +1934,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         }
         const Color color = env.roleForRegion(fill->paletteRole, fill->targetRegion,
                                               Color::black());
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
@@ -1876,24 +1950,23 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const float density = clamp01(fill->density);
         const float phase = fill->phase;
         const DitherModulation modulation = fill->modulation;
-        const Vec2f gradientStart = fill->gradientStart;
-        const Vec2f gradientEnd = fill->gradientEnd;
 
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.anchor = fill->anchor;
-        out.patternOrigin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
-        out.evaluateAt = [ramp, pattern, density, phase, modulation,
-                          gradientStart, gradientEnd](int32_t x, int32_t y, Vec2f origin) {
-            const float px = static_cast<float>(x) + 0.5f;
-            const float py = static_cast<float>(y) + 0.5f;
-            const float threshold = samplePattern(pattern, px, py, origin, phase).threshold;
+        out.frame = { patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage),
+                      fill->gradientStart, fill->gradientEnd };
+        out.evaluateAt = [ramp, pattern, density, phase, modulation](
+                             float px, float py, const PatternFrame& frame) {
+            const float threshold = samplePattern(pattern, px, py, frame.origin, phase).threshold;
             const float value = modulationValue(modulation, density, px, py,
-                                                origin, gradientStart, gradientEnd);
+                                                frame.origin, frame.start, frame.end);
             return ditherRampColor(ramp, value, threshold);
         };
         const auto evaluate = out.evaluateAt;
-        const Vec2f origin = out.patternOrigin;
-        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
+        const PatternFrame frame = out.frame;
+        out.color = [evaluate, frame](int32_t x, int32_t y) {
+            return evaluate(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f, frame);
+        };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -1912,7 +1985,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const float lengthSq = std::max(0.0001f, dx * dx + dy * dy);
         const bool repeat = fill->repeat;
 
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.color = [ramp, start, dx, dy, lengthSq, repeat](int32_t x, int32_t y) {
             const float px = static_cast<float>(x) + 0.5f - start.x;
             const float py = static_cast<float>(y) + 0.5f - start.y;
@@ -1937,7 +2010,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
                                           std::fabs(axis.y) * static_cast<float>(box.height()));
         const Vec2f origin { static_cast<float>(box.min.x), static_cast<float>(box.min.y) };
 
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.color = [ramp, axis, span, origin](int32_t x, int32_t y) {
             const float px = static_cast<float>(x) + 0.5f - origin.x;
             const float py = static_cast<float>(y) + 0.5f - origin.y;
@@ -1957,18 +2030,21 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const uint32_t seed = static_cast<uint32_t>(fill->seed);
         const float scale = std::max(0.0001f, fill->scale);
 
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.anchor = fill->anchor;
-        out.patternOrigin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
-        out.evaluateAt = [ramp, seed, scale](int32_t x, int32_t y, Vec2f origin) {
-            const int32_t sx = static_cast<int32_t>(std::floor((static_cast<float>(x) - origin.x) / scale));
-            const int32_t sy = static_cast<int32_t>(std::floor((static_cast<float>(y) - origin.y) / scale));
+        out.frame.origin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
+        out.evaluateAt = [ramp, seed, scale](float px, float py, const PatternFrame& frame) {
+            const Vec2f origin = frame.origin;
+            const int32_t sx = static_cast<int32_t>(std::floor((px - 0.5f - origin.x) / scale));
+            const int32_t sy = static_cast<int32_t>(std::floor((py - 0.5f - origin.y) / scale));
             const float t = static_cast<float>(stableHash(sx, sy, seed) % 10000u) / 10000.f;
             return sampleRampData(ramp, t, Color::white());
         };
         const auto evaluate = out.evaluateAt;
-        const Vec2f origin = out.patternOrigin;
-        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
+        const PatternFrame frame = out.frame;
+        out.color = [evaluate, frame](int32_t x, int32_t y) {
+            return evaluate(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f, frame);
+        };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -1986,20 +2062,22 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const float spacing = std::max(1.f, fill->spacing);
         const float lineWidth = std::max(0.f, fill->lineWidth);
 
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.anchor = fill->anchor;
-        out.patternOrigin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
+        out.frame.origin = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
         out.evaluateAt = [lineColor, bgColor, nx, ny, spacing, lineWidth](
-                             int32_t x, int32_t y, Vec2f origin) {
-            const float px = static_cast<float>(x) + 0.5f - origin.x;
-            const float py = static_cast<float>(y) + 0.5f - origin.y;
+                             float sampleX, float sampleY, const PatternFrame& frame) {
+            const float px = sampleX - frame.origin.x;
+            const float py = sampleY - frame.origin.y;
             const float projected = px * nx + py * ny;
             const float offset = projected - std::floor(projected / spacing) * spacing;
             return offset < lineWidth ? lineColor : bgColor;
         };
         const auto evaluate = out.evaluateAt;
-        const Vec2f origin = out.patternOrigin;
-        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
+        const PatternFrame frame = out.frame;
+        out.color = [evaluate, frame](int32_t x, int32_t y) {
+            return evaluate(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f, frame);
+        };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -2016,16 +2094,14 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const Vec2f offset = fill->offset;
         const float angle = fill->angle;
 
-        out.coverage = *coverage;
+        out.coverage = placed(fill->targetRegion, *coverage);
         out.anchor = fill->anchor;
         const Vec2f base = patternOriginFor(env, fill->anchor, fill->coordinateSpace, *coverage);
-        out.patternOrigin = { base.x + offset.x, base.y + offset.y };
+        out.frame.origin = { base.x + offset.x, base.y + offset.y };
         out.evaluateAt = [pattern, foreground, background, scale, angle](
-                             int32_t x, int32_t y, Vec2f origin) {
-            const PatternSample sample = samplePattern(pattern,
-                                                       static_cast<float>(x) + 0.5f,
-                                                       static_cast<float>(y) + 0.5f,
-                                                       origin, 0.f, scale, angle);
+                             float px, float py, const PatternFrame& frame) {
+            const PatternSample sample = samplePattern(pattern, px, py,
+                                                       frame.origin, 0.f, scale, angle);
             // A tile carrying colours is a texture; a bare threshold tile
             // resolves to the foreground and background roles instead.
             if (sample.hasColor) {
@@ -2034,8 +2110,10 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             return sample.threshold < 0.5f ? foreground : background;
         };
         const auto evaluate = out.evaluateAt;
-        const Vec2f origin = out.patternOrigin;
-        out.color = [evaluate, origin](int32_t x, int32_t y) { return evaluate(x, y, origin); };
+        const PatternFrame frame = out.frame;
+        out.color = [evaluate, frame](int32_t x, int32_t y) {
+            return evaluate(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f, frame);
+        };
         out.blend = fill->blend;
         out.opacity = fill->opacity;
         return true;
@@ -2054,8 +2132,9 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             closed = polyline->closed;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = strokePath(points, closed, stroke->width, stroke->cap, stroke->join,
-                                  stroke->miterLimit, stroke->taper, stroke->snap);
+        out.coverage = strokePath(placedPoints(points), closed, stroke->width * placedScale,
+                                  stroke->cap, stroke->join, stroke->miterLimit, stroke->taper,
+                                  stroke->snap);
 
         // A stroke pattern thins the mark along its own length: the tile is a
         // threshold screen, so the same tile that dithers a fill dashes a line.
@@ -2092,8 +2171,9 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             closed = curve->closed;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = strokePath(points, closed, stroke->width, stroke->cap, stroke->join,
-                                  stroke->miterLimit, stroke->taper, SnapPolicy::None);
+        out.coverage = strokePath(placedPoints(points), closed, stroke->width * placedScale,
+                                  stroke->cap, stroke->join, stroke->miterLimit, stroke->taper,
+                                  SnapPolicy::None);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;
@@ -2105,7 +2185,9 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             return false;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = env.impl->rasterizeGeometry(*geometry);
+        out.coverage = env.move == nullptr
+            ? env.impl->rasterizeGeometry(*geometry)
+            : env.impl->rasterizeGeometryThrough(*geometry, env.move->matrix);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;
@@ -2119,12 +2201,16 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const RegionData* region = env.impl->findRegion(stroke->targetRegion);
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
         // An authored closed loop already knows its own outline; otherwise the
-        // boundary is derived from coverage.
-        const IntervalSet base = (region != nullptr && !region->boundary.empty())
+        // boundary is derived from coverage. A moving region's edge is the
+        // edge of where it lands, so the edge and the fill inside it are one
+        // rasterization and cannot part.
+        const IntervalSet landed = placed(stroke->targetRegion, *coverage);
+        const IntervalSet base = (env.move == nullptr && region != nullptr &&
+                                  !region->boundary.empty())
             ? region->boundary
-            : geom::boundaryOf(*coverage);
+            : geom::boundaryOf(landed);
         out.coverage = stroke->width > 1.f
-            ? geom::intersectSets(geom::expand(base, stroke->width - 1.f, true), *coverage)
+            ? geom::intersectSets(geom::expand(base, stroke->width - 1.f, true), landed)
             : base;
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
@@ -2136,9 +2222,10 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (geometry == nullptr) {
             return false;
         }
-        const std::vector<Vec2f> points = env.impl->geometryPath(*geometry);
+        const std::vector<Vec2f> points = placedPoints(env.impl->geometryPath(*geometry));
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        const float spacing = std::max(0.05f, stroke->spacing) * std::max(1.f, stroke->size);
+        const float brushSize = stroke->size * placedScale;
+        const float spacing = std::max(0.05f, stroke->spacing) * std::max(1.f, brushSize);
 
         IntervalSet coverage;
         float carry = 0.f;
@@ -2157,15 +2244,15 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
                                                       stroke->scatterSeed);
                     const float offsetX = (static_cast<float>(noise % 1000u) / 1000.f - 0.5f) * 2.f;
                     const float offsetY = (static_cast<float>((noise / 1000u) % 1000u) / 1000.f - 0.5f) * 2.f;
-                    center.x += offsetX * stroke->scatter;
-                    center.y += offsetY * stroke->scatter;
+                    center.x += offsetX * stroke->scatter * placedScale;
+                    center.y += offsetY * stroke->scatter * placedScale;
                 }
-                const float radius = std::max(0.5f, stroke->size * 0.5f);
+                const float radius = std::max(0.5f, brushSize * 0.5f);
                 if (const PatternData* brush = env.impl->findPattern(stroke->brushPattern)) {
                     // The tile is the stamp: cells below the halfway threshold
                     // are the bristles.
                     const int32_t reach = static_cast<int32_t>(std::ceil(radius));
-                    const float step = stroke->size /
+                    const float step = brushSize /
                         static_cast<float>(std::max<uint32_t>(1, brush->desc.tileWidth));
                     IntervalSet stamp;
                     for (int32_t stampY = -reach; stampY <= reach; ++stampY) {
@@ -2338,6 +2425,253 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Geometry first.
+//
+// Pixels come last. A layer whose transforms are all matrices is compiled
+// with each mark resolved as geometry, moved by every transform after it,
+// and rasterized where it lands; the transforms then draw nothing themselves,
+// since there is no picture for them to resample. A turned outline is drawn
+// as a line at its new angle, one pixel wide and joined. A turned area is
+// exactly what its turned edge encloses. A pattern is worked out at the pixel
+// it colours, so a dither stays a dither at any angle.
+//
+// What cannot move as geometry keeps the old path, the whole layer at once: a
+// deform, a transform that needs the drawing to find its pivot or acts on one
+// region, and anything but a mark -- an outline, a shadow, a plugin -- before
+// the last transform, since those read the picture drawn so far.
+// ---------------------------------------------------------------------------
+
+// A mark that can be resolved as geometry and moved before it is rasterized.
+bool isGeometryMark(const Operation& op) {
+    return std::holds_alternative<FillSolidOp>(op) || std::holds_alternative<FillGradientOp>(op) ||
+           std::holds_alternative<FillRampOp>(op) || std::holds_alternative<FillDitherOp>(op) ||
+           std::holds_alternative<FillNoiseOp>(op) || std::holds_alternative<FillLinePatternOp>(op) ||
+           std::holds_alternative<FillTexturePatternOp>(op) ||
+           std::holds_alternative<FillSemanticColorOp>(op) ||
+           std::holds_alternative<StrokePolylineOp>(op) || std::holds_alternative<StrokeCurveOp>(op) ||
+           std::holds_alternative<StrokeRegionBoundaryOp>(op) ||
+           std::holds_alternative<StrokeBrushOp>(op) || std::holds_alternative<StrokePixelPathOp>(op) ||
+           std::holds_alternative<ClearRegionOp>(op);
+}
+
+// Whether a mark's coverage comes from shapes -- geometry, or a region made
+// from geometry -- rather than from pixels a document holds as pixels. Pixels
+// have no shape to move, and moving each mark's pixels as its own picture
+// would let an outline and the fill inside it land apart; a layer holding
+// any keeps the old path, all of it moved as one picture, until those pixels
+// become shapes.
+bool drawnFromShapes(const LSContext::Impl& impl, const Operation& op) {
+    const auto shaped = [&impl](RegionId id) {
+        const RegionData* region = impl.findRegion(id);
+        return region != nullptr && impl.findGeometry(region->source) != nullptr;
+    };
+    return std::visit([&](const auto& mark) -> bool {
+        using Mark = std::decay_t<decltype(mark)>;
+        if constexpr (std::is_same_v<Mark, StrokePolylineOp> || std::is_same_v<Mark, StrokeCurveOp> ||
+                      std::is_same_v<Mark, StrokeBrushOp> || std::is_same_v<Mark, StrokePixelPathOp>) {
+            return true;
+        } else if constexpr (std::is_same_v<Mark, FillSolidOp> || std::is_same_v<Mark, FillGradientOp> ||
+                             std::is_same_v<Mark, FillRampOp> || std::is_same_v<Mark, FillDitherOp> ||
+                             std::is_same_v<Mark, FillNoiseOp> || std::is_same_v<Mark, FillLinePatternOp> ||
+                             std::is_same_v<Mark, FillTexturePatternOp> ||
+                             std::is_same_v<Mark, FillSemanticColorOp> ||
+                             std::is_same_v<Mark, StrokeRegionBoundaryOp> ||
+                             std::is_same_v<Mark, ClearRegionOp>) {
+            return shaped(mark.targetRegion);
+        } else {
+            return false;
+        }
+    }, op);
+}
+
+// The matrix a transform applies -- built exactly as the raster path builds
+// it -- and the sampling it asks for. False for anything that is not one
+// matrix, or that needs the drawing itself to know its pivot.
+bool matrixOfTransform(const CompileEnv& env, const Operation& op, Mat3f* out,
+                       SamplingPolicy* sampling) {
+    const auto pivotOf = [&](PivotId pivot, Vec2f fallback, Vec2f* at) {
+        if (const PivotData* data = env.impl->findPivot(pivot)) {
+            *at = data->position;
+            return true;
+        }
+        if (fallback.x != 0.f || fallback.y != 0.f) {
+            *at = fallback;
+            return true;
+        }
+        return false;   // the middle of what is drawn: only a picture knows that
+    };
+    Vec2f pivot;
+    if (const auto* translate = std::get_if<TranslateOp>(&op)) {
+        if (translate->targetRegion.valid()) {
+            return false;
+        }
+        *out = applyRounding(Mat3f::translation(translate->delta), translate->rounding);
+        *sampling = SamplingPolicy::Center;
+        return true;
+    }
+    if (const auto* rotate = std::get_if<RotateOp>(&op)) {
+        if (rotate->targetRegion.valid() || !pivotOf(rotate->pivot, rotate->pivotFallback, &pivot)) {
+            return false;
+        }
+        *out = applyRounding(Mat3f::aroundPivot(Mat3f::rotation(rotate->angleDegrees), pivot),
+                             rotate->rounding);
+        *sampling = rotate->sampling;
+        return true;
+    }
+    if (const auto* scale = std::get_if<ScaleOp>(&op)) {
+        if (scale->targetRegion.valid() || !pivotOf(scale->pivot, scale->pivotFallback, &pivot)) {
+            return false;
+        }
+        *out = applyRounding(Mat3f::aroundPivot(Mat3f::scaling(scale->factor), pivot),
+                             scale->rounding);
+        *sampling = scale->sampling;
+        return true;
+    }
+    if (const auto* mirror = std::get_if<MirrorOp>(&op)) {
+        if (mirror->targetRegion.valid() || !pivotOf(mirror->pivot, mirror->pivotFallback, &pivot)) {
+            return false;
+        }
+        const Vec2f factor {
+            mirror->axis == MirrorAxis::Y ? 1.f : -1.f,
+            mirror->axis == MirrorAxis::X ? 1.f : -1.f
+        };
+        *out = applyRounding(Mat3f::aroundPivot(Mat3f::scaling(factor), pivot),
+                             RoundingPolicy::SubpixelHalf);
+        *sampling = SamplingPolicy::Center;
+        return true;
+    }
+    if (const auto* shear = std::get_if<ShearOp>(&op)) {
+        if (shear->targetRegion.valid() || !pivotOf(shear->pivot, shear->pivotFallback, &pivot)) {
+            return false;
+        }
+        *out = applyRounding(Mat3f::aroundPivot(Mat3f::shearing(shear->shear), pivot),
+                             RoundingPolicy::SubpixelHalf);
+        *sampling = shear->sampling;
+        return true;
+    }
+    if (const auto* skew = std::get_if<SkewOp>(&op)) {
+        if (skew->targetRegion.valid() || !pivotOf(skew->pivot, skew->pivotFallback, &pivot)) {
+            return false;
+        }
+        const Vec2f shear { math::tanf(skew->angleX * kPi / 180.f),
+                            math::tanf(skew->angleY * kPi / 180.f) };
+        *out = applyRounding(Mat3f::aroundPivot(Mat3f::shearing(shear), pivot),
+                             RoundingPolicy::SubpixelHalf);
+        *sampling = skew->sampling;
+        return true;
+    }
+    if (const auto* matrix = std::get_if<MatrixTransformOp>(&op)) {
+        if (matrix->targetRegion.valid()) {
+            return false;
+        }
+        *out = applyRounding(matrix->matrix, matrix->rounding);
+        *sampling = matrix->sampling;
+        return true;
+    }
+    return false;
+}
+
+// How each operation of a layer moves, geometry first. False when the layer
+// has no transform to resolve or cannot be compiled this way.
+bool planGeometric(const CompileEnv& env, const LSContext::Impl& impl, const LayerData& layer,
+                   std::vector<MarkMove>* moves) {
+    const std::vector<OperationId>& operations = layer.operations;
+    int64_t last = -1;
+    for (size_t i = 0; i < operations.size(); ++i) {
+        const OperationData* data = impl.findOperation(operations[i]);
+        if (data != nullptr && operationIsTransform(data->op)) {
+            last = static_cast<int64_t>(i);
+        }
+    }
+    if (last < 0) {
+        return false;
+    }
+    moves->assign(operations.size(), MarkMove{});
+    Mat3f after;                       // everything after the operation, composed
+    SamplingPolicy sampling = SamplingPolicy::Center;
+    for (size_t n = operations.size(); n-- > 0;) {
+        const OperationData* data = impl.findOperation(operations[n]);
+        if (data == nullptr) {
+            continue;
+        }
+        if (operationIsTransform(data->op)) {
+            Mat3f matrix;
+            SamplingPolicy asked = SamplingPolicy::Center;
+            if (!matrixOfTransform(env, data->op, &matrix, &asked)) {
+                return false;
+            }
+            after = after.mul(matrix);          // this one happens first
+            if (asked == SamplingPolicy::RotSprite || sampling == SamplingPolicy::Center) {
+                sampling = asked;
+            }
+            continue;
+        }
+        if (static_cast<int64_t>(n) > last) {
+            continue;                           // after every transform: drawn in place
+        }
+        if (!isGeometryMark(data->op) || !drawnFromShapes(impl, data->op)) {
+            return false;
+        }
+        if (isIdentityTransform(after)) {
+            continue;
+        }
+        auto inverse = after.inverse();
+        if (inverse.fail()) {
+            return false;                       // a scale of zero: the old path collapses it
+        }
+        MarkMove& move = (*moves)[n];
+        move.matrix = after;
+        move.inverse = inverse.value;
+        move.sampling = sampling;
+        move.moves = true;
+    }
+    return true;
+}
+
+// A moved mark's colour, worked out where it lands.
+//   Local: the pattern rides the mark, so each pixel is coloured from the
+//          point of the drawing it came from.
+//   Global: the lattice stays level with the canvas, while its origin and a
+//          gradient's axis travel with the mark.
+//   Fixed: the canvas's own lattice, wherever the mark went.
+// A fill with no pattern is coloured from the pixel it came from.
+void colourWhereItLands(Mark& mark, const MarkMove& move) {
+    const Mat3f inverse = move.inverse;
+    if (mark.evaluateAt) {
+        const auto evaluate = mark.evaluateAt;
+        PatternFrame frame = mark.frame;
+        if (mark.anchor == PatternAnchor::Local) {
+            mark.color = [evaluate, frame, inverse](int32_t x, int32_t y) {
+                const Vec2f from = inverse.transformPoint({ static_cast<float>(x) + 0.5f,
+                                                            static_cast<float>(y) + 0.5f });
+                return evaluate(from.x, from.y, frame);
+            };
+            return;
+        }
+        if (mark.anchor == PatternAnchor::Global) {
+            const Vec2f origin = move.matrix.transformPoint(frame.origin);
+            const Vec2f start = move.matrix.transformPoint({ frame.origin.x + frame.start.x,
+                                                             frame.origin.y + frame.start.y });
+            const Vec2f end = move.matrix.transformPoint({ frame.origin.x + frame.end.x,
+                                                           frame.origin.y + frame.end.y });
+            frame = { origin, { start.x - origin.x, start.y - origin.y },
+                      { end.x - origin.x, end.y - origin.y } };
+        }
+        mark.color = [evaluate, frame](int32_t x, int32_t y) {
+            return evaluate(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f, frame);
+        };
+        return;
+    }
+    const auto colour = mark.color;
+    mark.color = [colour, inverse](int32_t x, int32_t y) {
+        const Vec2f from = inverse.transformPoint({ static_cast<float>(x) + 0.5f,
+                                                    static_cast<float>(y) + 0.5f });
+        return colour(static_cast<int32_t>(std::floor(from.x)),
+                      static_cast<int32_t>(std::floor(from.y)));
+    };
+}
+
 Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& profile) {
     return compileLayerWithin(id, profile, nullptr, false);
 }
@@ -2434,8 +2768,8 @@ Result<CompileResult> LSContext::compileLayerWithin(
     struct DeferredFill {
         uint32_t tag = 0;
         PatternAnchor anchor = PatternAnchor::Global;
-        Vec2f origin;
-        std::function<Color(int32_t, int32_t, Vec2f)> evaluate;
+        PatternFrame frame;
+        std::function<Color(float, float, const PatternFrame&)> evaluate;
     };
     std::vector<DeferredFill> deferred;
     RasterBuffer tagPlane;
@@ -2488,8 +2822,16 @@ Result<CompileResult> LSContext::compileLayerWithin(
         }
     };
 
+    // Geometry first, when the layer allows it (see planGeometric).
+    std::vector<MarkMove> moves;
+    const bool geometric = resolved.resolveTransforms && !env.samplePolicy &&
+                           planGeometric(env, *impl_, *layer, &moves);
+    size_t opIndex = 0;
+
     for (OperationId opId : layer->operations) {
         const OperationData* data = impl_->findOperation(opId);
+        const MarkMove* move = geometric && moves[opIndex].moves ? &moves[opIndex] : nullptr;
+        ++opIndex;
         if (data == nullptr) {
             continue;
         }
@@ -2589,27 +2931,35 @@ Result<CompileResult> LSContext::compileLayerWithin(
                 env.note("op " + std::to_string(opId.value) + ": transform recorded, not resolved");
                 continue;
             }
-            // A Global pattern travels with its object, so its origin is moved
-            // by whatever moved the content, affine or not. A Fixed pattern is
-            // left out of the list and so never moves.
-            std::vector<Vec2f> travellingOrigins;
+            if (geometric) {
+                env.note("op " + std::to_string(opId.value) + ": " +
+                         std::string(operationTypeName(data->op)) +
+                         " moved the marks before it as geometry");
+                continue;
+            }
+            // A Global pattern travels with its object, so its frame is moved
+            // by whatever moved the content, affine or not: the origin, and the
+            // two ends of its gradient's axis -- a gradient is the object's
+            // shading, so it turns with the object, while the lattice it is
+            // dithered through stays level. A Fixed pattern is left out of the
+            // list and so never moves.
+            std::vector<Vec2f> travelling;
             std::vector<size_t> travellingIndices;
             for (size_t i = 0; i < deferred.size(); ++i) {
                 if (deferred[i].anchor == PatternAnchor::Global) {
-                    travellingOrigins.push_back(deferred[i].origin);
+                    const PatternFrame& frame = deferred[i].frame;
+                    travelling.push_back(frame.origin);
+                    travelling.push_back({ frame.origin.x + frame.start.x,
+                                           frame.origin.y + frame.start.y });
+                    travelling.push_back({ frame.origin.x + frame.end.x,
+                                           frame.origin.y + frame.end.y });
                     travellingIndices.push_back(i);
                 }
             }
+            std::vector<Vec2f>* tracked = travelling.empty() ? nullptr : &travelling;
 
             syncTagAlpha();
-            result.raster = applyTransformOperation(
-                env, data->op, result.raster,
-                travellingOrigins.empty() ? nullptr : &travellingOrigins);
-
-            for (size_t i = 0; i < travellingIndices.size(); ++i) {
-                deferred[travellingIndices[i]].origin = travellingOrigins[i];
-            }
-
+            result.raster = applyTransformOperation(env, data->op, result.raster, tracked);
             if (!deferred.empty() && !tagPlane.empty()) {
                 // Carry provenance with the pixels. The tag pass runs without a
                 // sampling policy: a policy chooses colours, not owners.
@@ -2617,6 +2967,16 @@ Result<CompileResult> LSContext::compileLayerWithin(
                 tagEnv.samplePolicy = {};
                 tagEnv.trace = nullptr;
                 tagPlane = applyTransformOperation(tagEnv, data->op, tagPlane);
+            }
+
+            for (size_t i = 0; i < travellingIndices.size(); ++i) {
+                PatternFrame& frame = deferred[travellingIndices[i]].frame;
+                const Vec2f origin = travelling[i * 3];
+                const Vec2f start = travelling[i * 3 + 1];
+                const Vec2f end = travelling[i * 3 + 2];
+                frame.origin = origin;
+                frame.start = { start.x - origin.x, start.y - origin.y };
+                frame.end = { end.x - origin.x, end.y - origin.y };
             }
             env.note("op " + std::to_string(opId.value) + ": resolved " +
                      std::string(operationTypeName(data->op)) + " over layer content");
@@ -2722,11 +3082,14 @@ Result<CompileResult> LSContext::compileLayerWithin(
 
         // An erase: what is drawn so far goes, inside the region.
         if (const auto* clear = std::get_if<ClearRegionOp>(&data->op)) {
-            const IntervalSet* coverage = regionCoverage(env, clear->targetRegion);
-            if (coverage == nullptr) {
+            const IntervalSet* drawn = regionCoverage(env, clear->targetRegion);
+            if (drawn == nullptr) {
                 env.note("op " + std::to_string(opId.value) + ": skipped ClearRegionOp (missing input)");
                 continue;
             }
+            const IntervalSet landed = move == nullptr
+                ? IntervalSet{} : regionThrough(env, clear->targetRegion, *move);
+            const IntervalSet* coverage = move == nullptr ? drawn : &landed;
             for (const Interval& interval : coverage->intervals) {
                 for (int32_t x = interval.x0; x < interval.x1; ++x) {
                     setRasterPixel(result.raster, x, interval.y, Color::transparent());
@@ -2851,10 +3214,16 @@ Result<CompileResult> LSContext::compileLayerWithin(
         }
 
         Mark mark;
-        if (!resolveMarkOperation(env, data->op, result.raster, mark)) {
+        env.move = move;
+        const bool markResolved = resolveMarkOperation(env, data->op, result.raster, mark);
+        env.move = nullptr;
+        if (!markResolved) {
             env.note("op " + std::to_string(opId.value) + ": skipped " +
                      std::string(operationTypeName(data->op)) + " (missing input)");
             continue;
+        }
+        if (move != nullptr) {
+            colourWhereItLands(mark, *move);
         }
         compositeMark(result.raster, mark);
         if (!mark.coverage.empty()) {
@@ -2864,13 +3233,14 @@ Result<CompileResult> LSContext::compileLayerWithin(
                                                 mark.blend, mark.opacity };
         }
 
-        const bool deferrable = mark.anchor != PatternAnchor::Local && mark.evaluateAt &&
-                                !mark.coverage.empty();
+        // Geometry first, every mark is already coloured where it lands.
+        const bool deferrable = !geometric && mark.anchor != PatternAnchor::Local &&
+                                mark.evaluateAt && !mark.coverage.empty();
         if (deferrable && ensureTagPlane()) {
             DeferredFill fill;
             fill.tag = nextTag++;
             fill.anchor = mark.anchor;
-            fill.origin = mark.patternOrigin;
+            fill.frame = mark.frame;
             fill.evaluate = mark.evaluateAt;
             deferred.push_back(std::move(fill));
             stampTags(mark.coverage, deferred.back().tag);
@@ -2901,7 +3271,8 @@ Result<CompileResult> LSContext::compileLayerWithin(
                     if (painted.a == 0) {
                         continue;
                     }
-                    Color resolvedColor = fill.evaluate(x, y, fill.origin);
+                    Color resolvedColor = fill.evaluate(static_cast<float>(x) + 0.5f,
+                                                        static_cast<float>(y) + 0.5f, fill.frame);
                     resolvedColor.a = painted.a;
                     setRasterPixel(result.raster, x, y, resolvedColor);
                     ++repainted;

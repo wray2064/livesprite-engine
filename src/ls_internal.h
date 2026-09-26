@@ -399,6 +399,8 @@ struct LSContext::Impl {
 
     // --- geometry ---------------------------------------------------------
     IntervalSet rasterizeGeometry(const GeometryData& data) const;
+    // The shape moved by `matrix`, then rasterized where it lands.
+    IntervalSet rasterizeGeometryThrough(const GeometryData& data, const Mat3f& matrix) const;
     std::vector<Vec2f> geometryPath(const GeometryData& data) const;
 
     // --- compile helpers (implemented in ls_compile.cpp) -------------------

@@ -770,24 +770,38 @@ IntervalSet rasterizeCurve(const CurveDesc& desc) {
     // then without the L-shaped corners that a stair of short segments leaves
     // doubled. Plotting each flattened segment into a set instead gives a line
     // that thickens wherever it turns.
+    return rasterizePixelWalk(path, false);
+}
+
+IntervalSet rasterizePixelWalk(const std::vector<Vec2f>& points, bool closed) {
+    if (points.empty()) {
+        return {};
+    }
     std::vector<Vec2i> walk;
     const auto visit = [&walk](int32_t x, int32_t y) {
         if (!walk.empty() && walk.back().x == x && walk.back().y == y) {
             return;
         }
-        // Straight back to the pixel before: a wobble of the flattening, not
-        // a stroke -- take the last step back instead.
+        // Straight back to the pixel before: a wobble of the path, not a
+        // stroke -- take the last step back instead.
         if (walk.size() >= 2 && walk[walk.size() - 2].x == x && walk[walk.size() - 2].y == y) {
             walk.pop_back();
             return;
         }
         walk.push_back({ x, y });
     };
-    for (size_t i = 0; i + 1 < path.size(); ++i) {
-        int32_t x0 = static_cast<int32_t>(std::floor(path[i].x));
-        int32_t y0 = static_cast<int32_t>(std::floor(path[i].y));
-        const int32_t x1 = static_cast<int32_t>(std::floor(path[i + 1].x));
-        const int32_t y1 = static_cast<int32_t>(std::floor(path[i + 1].y));
+    const size_t segments = closed && points.size() > 2 ? points.size() : points.size() - 1;
+    if (segments == 0) {
+        visit(static_cast<int32_t>(std::floor(points.front().x)),
+              static_cast<int32_t>(std::floor(points.front().y)));
+    }
+    for (size_t i = 0; i < segments; ++i) {
+        const Vec2f& from = points[i];
+        const Vec2f& to = points[(i + 1) % points.size()];
+        int32_t x0 = static_cast<int32_t>(std::floor(from.x));
+        int32_t y0 = static_cast<int32_t>(std::floor(from.y));
+        const int32_t x1 = static_cast<int32_t>(std::floor(to.x));
+        const int32_t y1 = static_cast<int32_t>(std::floor(to.y));
         const int32_t dx =  std::abs(x1 - x0);
         const int32_t dy = -std::abs(y1 - y0);
         const int32_t sx = x0 < x1 ? 1 : -1;
@@ -803,23 +817,115 @@ IntervalSet rasterizeCurve(const CurveDesc& desc) {
             if (e2 <= dx) { err += dx; y0 += sy; }
         }
     }
+    // A closed walk comes back to where it started: that pixel once.
+    if (closed && walk.size() > 1 && walk.back().x == walk.front().x &&
+        walk.back().y == walk.front().y) {
+        walk.pop_back();
+    }
+    const auto corner = [](const Vec2i& a, const Vec2i& b, const Vec2i& p) {
+        return std::abs(p.x - a.x) == 1 && std::abs(p.y - a.y) == 1 &&
+               (b.x == a.x || b.y == a.y) && (b.x == p.x || b.y == p.y);
+    };
     std::vector<Vec2i> kept;
     kept.reserve(walk.size());
     for (const Vec2i& p : walk) {
-        if (kept.size() >= 2) {
-            const Vec2i& a = kept[kept.size() - 2];
-            const Vec2i& b = kept.back();
-            const bool corner = std::abs(p.x - a.x) == 1 && std::abs(p.y - a.y) == 1 &&
-                                (b.x == a.x || b.y == a.y) && (b.x == p.x || b.y == p.y);
-            if (corner) {
-                kept.pop_back();
-            }
+        if (kept.size() >= 2 && corner(kept[kept.size() - 2], kept.back(), p)) {
+            kept.pop_back();
         }
         kept.push_back(p);
+    }
+    // Round the seam of a closed walk too: the last pixel and the first, each
+    // with the pixels either side of it.
+    if (closed && kept.size() >= 4) {
+        if (corner(kept[kept.size() - 2], kept.back(), kept.front())) {
+            kept.pop_back();
+        }
+        if (kept.size() >= 4 && corner(kept.back(), kept.front(), kept[1])) {
+            kept.erase(kept.begin());
+        }
     }
     PixelSet pixels;
     for (const Vec2i& p : kept) {
         pixels.insert(pixelKey(p.x, p.y));
+    }
+    return fromPixelSet(pixels);
+}
+
+IntervalSet rasterizeArea(const std::vector<Vec2f>& outline, bool bySpans) {
+    if (!bySpans) {
+        return fillPolygon(outline);
+    }
+    IntervalSet set;
+    if (outline.size() < 3) {
+        return set;
+    }
+    float minY = outline[0].y, maxY = outline[0].y;
+    for (const Vec2f& p : outline) {
+        minY = std::min(minY, p.y);
+        maxY = std::max(maxY, p.y);
+    }
+    std::vector<float> crossings;
+    for (int32_t y = static_cast<int32_t>(std::floor(minY));
+         y < static_cast<int32_t>(std::ceil(maxY)); ++y) {
+        const float sampleY = static_cast<float>(y) + 0.5f;
+        crossings.clear();
+        for (size_t i = 0; i < outline.size(); ++i) {
+            const Vec2f& p = outline[i];
+            const Vec2f& q = outline[(i + 1) % outline.size()];
+            if (p.y == q.y) {
+                continue;
+            }
+            const float lo = std::min(p.y, q.y);
+            const float hi = std::max(p.y, q.y);
+            if (sampleY < lo || sampleY >= hi) {
+                continue;
+            }
+            crossings.push_back(p.x + (sampleY - p.y) / (q.y - p.y) * (q.x - p.x));
+        }
+        std::sort(crossings.begin(), crossings.end());
+        for (size_t i = 0; i + 1 < crossings.size(); i += 2) {
+            const int32_t x0 = static_cast<int32_t>(std::floor(crossings[i]));
+            const int32_t x1 = static_cast<int32_t>(std::ceil(crossings[i + 1]));
+            if (x1 > x0) {
+                set.intervals.push_back({ y, x0, x1 });
+            }
+        }
+    }
+    return normalize(std::move(set));
+}
+
+bool keepsPixelGrid(const Mat3f& matrix) {
+    const auto whole = [](float value) { return std::fabs(value - std::round(value)) < 1e-4f; };
+    const float a = matrix.m[0], b = matrix.m[1], c = matrix.m[3], d = matrix.m[4];
+    return whole(a) && whole(b) && whole(c) && whole(d) &&
+           whole(matrix.m[2]) && whole(matrix.m[5]) &&
+           std::fabs(std::fabs(a) + std::fabs(b) - 1.f) < 1e-4f &&
+           std::fabs(std::fabs(c) + std::fabs(d) - 1.f) < 1e-4f &&
+           std::fabs(std::fabs(a) + std::fabs(c) - 1.f) < 1e-4f;
+}
+
+IntervalSet mapAcrossGrid(const IntervalSet& set, const Mat3f& matrix) {
+    // A whole-pixel move: the runs shifted, nothing else.
+    if (std::fabs(matrix.m[0] - 1.f) < 1e-4f && std::fabs(matrix.m[4] - 1.f) < 1e-4f &&
+        std::fabs(matrix.m[1]) < 1e-4f && std::fabs(matrix.m[3]) < 1e-4f) {
+        const int32_t dx = static_cast<int32_t>(std::lround(matrix.m[2]));
+        const int32_t dy = static_cast<int32_t>(std::lround(matrix.m[5]));
+        IntervalSet moved = set;
+        for (Interval& interval : moved.intervals) {
+            interval.y += dy;
+            interval.x0 += dx;
+            interval.x1 += dx;
+        }
+        return moved;
+    }
+    PixelSet pixels;
+    for (const Interval& interval : set.intervals) {
+        for (int32_t x = interval.x0; x < interval.x1; ++x) {
+            const Vec2f to = matrix.transformPoint({ static_cast<float>(x) + 0.5f,
+                                                     static_cast<float>(interval.y) + 0.5f });
+            pixels.insert(pixelKey(static_cast<int32_t>(std::floor(to.x)),
+                                   static_cast<int32_t>(std::floor(to.y))));
+        }
     }
     return fromPixelSet(pixels);
 }
@@ -1187,8 +1293,16 @@ Mat3f Mat3f::translation(Vec2f t) {
 
 Mat3f Mat3f::rotation(float angleDegrees) {
     const float radians = angleDegrees * 3.14159265358979323846f / 180.f;
-    const float c = math::cosf(radians);
-    const float s = math::sinf(radians);
+    float c = math::cosf(radians);
+    float s = math::sinf(radians);
+    // A quarter turn is exact: cos 90 computed is 4e-8, not 0, and that is
+    // enough to tip a pattern threshold that sits exactly on a tie.
+    const float quarters = angleDegrees / 90.f;
+    if (quarters == std::floor(quarters)) {
+        const int turn = ((static_cast<int>(quarters) % 4) + 4) % 4;
+        c = turn == 0 ? 1.f : turn == 2 ? -1.f : 0.f;
+        s = turn == 1 ? 1.f : turn == 3 ? -1.f : 0.f;
+    }
     Mat3f m;
     m.m[0] =  c; m.m[1] = -s;
     m.m[3] =  s; m.m[4] =  c;

@@ -708,6 +708,7 @@ void testRotatedOutlinesStayClosed(LSContext& ctx) {
     }
     const Color orange {230, 140, 60, 255};
     const Color blue {30, 70, 110, 255};
+    const Color dark {20, 24, 30, 255};
     // The inside: everything the outline encloses, found by flooding from the
     // border.
     std::vector<uint8_t> wall(kSize * kSize, 0);
@@ -745,20 +746,64 @@ void testRotatedOutlinesStayClosed(LSContext& ctx) {
     outline.closeSameColorBoundaries = false;
     inside.closeSameColorBoundaries = false;
 
-    for (int filled = 0; filled < 2; ++filled) {
+    // The same wobble as shapes rather than pixels: its points, exactly.
+    PolylineDesc path;
+    for (int i = 0; i < 180; ++i) {
+        const float t = static_cast<float>(i) / 180.f * 6.2831853f;
+        const float r = 16.f + 5.f * std::sin(5.f * t) + 2.f * std::cos(3.f * t);
+        path.points.push_back({ kMid + r * std::cos(t), kMid + r * std::sin(t) });
+    }
+    path.closed = true;
+    PolygonDesc area;
+    area.vertices = path.points;
+
+    // Pixels: the outline alone, and over a solid fill -- moved as one picture
+    // by RotSprite. Shapes: the path drawn as a line over a level dither, and
+    // a filled shape with its edge -- moved as shapes and rasterized after.
+    const char* kKinds[4] = { "outline", "filled", "path over dither", "shape and edge" };
+    for (int filled = 0; filled < 4; ++filled) {
         auto doc = ctx.createDocument({"blob", kSize, kSize});
         auto sprite = ctx.createSprite(doc.value);
         auto layer = ctx.createLayer(sprite.value, {"blob"});
-        if (filled != 0) {
+        if (filled == 1) {
             FillSolidOp fill;
             fill.targetRegion = ctx.createRegionFromPixels(doc.value, inside).value;
             fill.fallbackColor = blue;
             LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+        } else if (filled == 2) {
+            FillDitherOp fill;
+            fill.targetRegion = ctx.createRegionFromGeometry(
+                ctx.createPolygon(doc.value, area).value).value;
+            fill.ramp = ctx.createRamp(doc.value, {"two", {{0.f, dark}, {1.f, blue}}, true}).value;
+            fill.pattern = ctx.createDitherPattern(doc.value, DitherPatternKind::Bayer4).value;
+            fill.modulation = DitherModulation::Constant;
+            fill.density = 0.5f;
+            fill.anchor = PatternAnchor::Global;
+            fill.coordinateSpace = CoordinateSpace::Canvas;
+            LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+        } else if (filled == 3) {
+            const RegionId shape = ctx.createRegionFromGeometry(
+                ctx.createPolygon(doc.value, area).value).value;
+            FillSolidOp fill;
+            fill.targetRegion = shape;
+            fill.fallbackColor = blue;
+            LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+            StrokeRegionBoundaryOp edge;
+            edge.targetRegion = shape;
+            edge.fallbackColor = orange;
+            LS_REQUIRE(ctx.addOperation(layer.value, edge).ok());
         }
-        FillSolidOp line;
-        line.targetRegion = ctx.createRegionFromPixels(doc.value, outline).value;
-        line.fallbackColor = orange;
-        LS_REQUIRE(ctx.addOperation(layer.value, line).ok());
+        if (filled == 2) {
+            StrokePixelPathOp line;
+            line.path = ctx.createPolyline(doc.value, path).value;
+            line.fallbackColor = orange;
+            LS_REQUIRE(ctx.addOperation(layer.value, line).ok());
+        } else if (filled < 2) {
+            FillSolidOp line;
+            line.targetRegion = ctx.createRegionFromPixels(doc.value, outline).value;
+            line.fallbackColor = orange;
+            LS_REQUIRE(ctx.addOperation(layer.value, line).ok());
+        }
         RotateOp rotate;
         rotate.targetLayer = layer.value;
         rotate.pivotFallback = {static_cast<float>(kMid), static_cast<float>(kMid)};
@@ -771,6 +816,7 @@ void testRotatedOutlinesStayClosed(LSContext& ctx) {
         profile.outputHeight = kSize;
         int broken = 0;
         int leaked = 0;
+        int clashes = 0;
         for (int angle = 3; angle < 360; angle += 7) {
             LS_REQUIRE(ctx.setOperationParameter(rotation.value, "angleDegrees",
                                                  ParameterValue{static_cast<float>(angle)}).ok());
@@ -785,18 +831,36 @@ void testRotatedOutlinesStayClosed(LSContext& ctx) {
             }
             const std::vector<uint8_t> outside = outsideOf(blocked, kSize);
             broken += outside[kMid * kSize + kMid] ? 1 : 0;
+            // A level half-density dither is a checkerboard wherever it lands:
+            // no two side by side the same.
+            if (filled == 2) {
+                for (int y = 0; y < kSize; ++y) {
+                    for (int x = 0; x + 1 < kSize; ++x) {
+                        const Color c = readPixel(compiled.value.raster, x, y);
+                        const Color right = readPixel(compiled.value.raster, x + 1, y);
+                        const bool fillHere = c.a != 0 && c.r != orange.r;
+                        const bool fillRight = right.a != 0 && right.r != orange.r;
+                        clashes += fillHere && fillRight && c == right ? 1 : 0;
+                    }
+                }
+            }
             for (int y = 0; y < kSize; ++y) {
                 for (int x = 0; x < kSize; ++x) {
                     const Color c = readPixel(compiled.value.raster, x, y);
-                    leaked += (outside[y * kSize + x] && c.a != 0 && c.b == blue.b) ? 1 : 0;
+                    // A fill drawn apart from its outline can put a pixel
+                    // outside it at a trimmed corner; one drawn as the area
+                    // inside its own edge cannot.
+                    leaked += (filled != 2 && outside[y * kSize + x] && c.a != 0 &&
+                               (c.b == blue.b || c.b == dark.b)) ? 1 : 0;
                 }
             }
         }
         LS_CHECK(broken == 0);
         LS_CHECK(leaked == 0);
-        if (broken != 0 || leaked != 0) {
-            std::printf("    %s: %d angles broken open, %d fill pixels outside\n",
-                        filled != 0 ? "filled" : "outline", broken, leaked);
+        LS_CHECK(clashes == 0);
+        if (broken != 0 || leaked != 0 || clashes != 0) {
+            std::printf("    %s: %d angles broken open, %d fill pixels outside, %d dither clashes\n",
+                        kKinds[filled], broken, leaked, clashes);
         }
     }
 }

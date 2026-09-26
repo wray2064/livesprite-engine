@@ -198,6 +198,28 @@ IntervalSet rasterizeCircle(const CircleDesc& desc);
 IntervalSet rasterizePolygon(const PolygonDesc& desc);
 IntervalSet rasterizeCurve(const CurveDesc& desc);
 
+// --- Through a transform --------------------------------------------------
+// Pixels come last. A shape that moves is moved as a shape and rasterized
+// where it lands, so a turned line is drawn as a line at its new angle -- one
+// pixel wide and joined up -- and a turned area is the pixels its turned edge
+// encloses, rather than a picture of either, turned and resampled.
+
+// True when the matrix carries every pixel onto exactly one pixel: quarter
+// turns, mirrors and whole-pixel moves. Such a move loses nothing, so the
+// shape's own pixels are carried across (mapAcrossGrid) rather than redrawn.
+bool keepsPixelGrid(const Mat3f& matrix);
+IntervalSet mapAcrossGrid(const IntervalSet& set, const Mat3f& matrix);
+
+// A line one pixel wide through the points, the way a pixel artist draws one:
+// the pixels in the order the path visits them, without the doubled L corners
+// a stair of short segments leaves. Closed, the last point joins the first.
+IntervalSet rasterizePixelWalk(const std::vector<Vec2f>& points, bool closed);
+
+// The pixels inside an outline. By centres: a pixel whose centre is inside
+// (the polygon rule). By spans: a pixel any part of whose row centre line is
+// inside (the ellipse rule, which keeps small round shapes round).
+IntervalSet rasterizeArea(const std::vector<Vec2f>& outline, bool bySpans = false);
+
 // --- Contours -------------------------------------------------------------
 std::vector<Vec2f> flattenCurve(const CurveDesc& desc, float tolerance = 0.25f);
 std::vector<Vec2f> simplifyPath(const std::vector<Vec2f>& points, const SimplifyParams& params);

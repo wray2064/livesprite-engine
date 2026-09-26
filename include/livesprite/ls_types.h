@@ -287,7 +287,10 @@ inline bool operator!=(Color a, Color b) { return !(a == b); }
 //   Local  - the pattern rides the object: it translates AND rotates with it,
 //            so a dithered blade keeps its texture through a swing.
 //   Global - the pattern translates with the object but stays rotation locked
-//            to the canvas axes, so hatching keeps pointing the same way.
+//            to the canvas axes, so hatching keeps pointing the same way and
+//            a dither turned with its object is still a clean dither. A
+//            dithered gradient's axis is the object's shading rather than the
+//            lattice, so it does turn with the object.
 //   Fixed  - the pattern is nailed to the canvas: parent motion never moves it,
 //            which is what a background texture or a screen-door effect wants.
 enum class PatternAnchor : uint8_t {

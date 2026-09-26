@@ -535,6 +535,91 @@ void testCoordinateSpacesAreDistinct() {
 
 } // namespace
 
+// A Global dithered gradient on a turned object. The gradient's axis turns
+// with the object -- it is the object's shading -- while the lattice it is
+// dithered through stays level: a quarter turn draws exactly what a level
+// gradient along the turned axis draws. At any other angle the pattern is
+// still the pattern, pixel for pixel, where a Local one is turned as a picture
+// and comes out as a scatter.
+void testGlobalGradientTurnsLevel() {
+    auto ctx = LSContext::create();
+    const Color dark {20, 20, 40, 255};
+    const Color light {220, 220, 240, 255};
+    const auto build = [&](PatternAnchor anchor, DitherModulation modulation,
+                           Vec2f start, Vec2f end, float angle) {
+        const Scene scene = makeScene(*ctx, {8.f, 8.f}, 16.f, 32);
+        FillDitherOp dither;
+        dither.targetRegion = scene.region;
+        dither.ramp = ctx->createRamp(scene.doc, {"two", {{0.f, dark}, {1.f, light}}, true}).value;
+        dither.pattern = ctx->createDitherPattern(scene.doc, DitherPatternKind::Bayer4).value;
+        dither.modulation = modulation;
+        dither.density = 0.5f;
+        dither.gradientStart = start;
+        dither.gradientEnd = end;
+        dither.anchor = anchor;
+        dither.coordinateSpace = CoordinateSpace::Canvas;
+        LS_CHECK(ctx->addOperation(scene.layer, dither).ok());
+        if (angle != 0.f) {
+            RotateOp rotate;
+            rotate.targetLayer = scene.layer;
+            rotate.angleDegrees = angle;
+            rotate.pivotFallback = {16.f, 16.f};
+            rotate.sampling = SamplingPolicy::RotSprite;
+            LS_CHECK(ctx->addOperation(scene.layer, rotate).ok());
+        }
+        auto compiled = ctx->compileSprite(scene.sprite, exportProfile());
+        return compiled.ok() ? compiled.value.raster : RasterBuffer{};
+    };
+    const auto same = [](const RasterBuffer& a, const RasterBuffer& b) {
+        if (a.empty() || a.width != b.width || a.height != b.height) {
+            return false;
+        }
+        for (int32_t y = 0; y < static_cast<int32_t>(a.height); ++y) {
+            for (int32_t x = 0; x < static_cast<int32_t>(a.width); ++x) {
+                if (readPixel(a, x, y) != readPixel(b, x, y)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    // Left to right, turned a quarter: top to bottom or bottom to top,
+    // whichever way the turn goes, and level.
+    const RasterBuffer turned = build(PatternAnchor::Global, DitherModulation::Linear,
+                                      {8.f, 16.f}, {24.f, 16.f}, 90.f);
+    const RasterBuffer down = build(PatternAnchor::Global, DitherModulation::Linear,
+                                    {16.f, 8.f}, {16.f, 24.f}, 0.f);
+    const RasterBuffer up = build(PatternAnchor::Global, DitherModulation::Linear,
+                                  {16.f, 24.f}, {16.f, 8.f}, 0.f);
+    LS_CHECK(same(turned, down) || same(turned, up));
+    LS_CHECK(!same(down, up));
+
+    // A flat half density is a checkerboard. Turned 30 degrees, a Global one
+    // still is, everywhere inside the shape; a Local one is not.
+    const auto clashes = [](const RasterBuffer& raster) {
+        int count = 0;
+        for (int32_t y = 1; y + 1 < static_cast<int32_t>(raster.height); ++y) {
+            for (int32_t x = 1; x + 1 < static_cast<int32_t>(raster.width); ++x) {
+                const Color c = readPixel(raster, x, y);
+                const Color right = readPixel(raster, x + 1, y);
+                const Color below = readPixel(raster, x, y + 1);
+                if (c.a == 0 || right.a == 0 || below.a == 0) {
+                    continue;
+                }
+                count += (c == right ? 1 : 0) + (c == below ? 1 : 0);
+            }
+        }
+        return count;
+    };
+    const RasterBuffer level = build(PatternAnchor::Global, DitherModulation::Constant,
+                                     {}, {}, 30.f);
+    const RasterBuffer turnedWith = build(PatternAnchor::Local, DitherModulation::Constant,
+                                          {}, {}, 30.f);
+    LS_CHECK(clashes(level) == 0);
+    LS_CHECK(clashes(turnedWith) > 10);
+}
+
 int main() {
     testDitheredGradient();
     testPatternLibrary();
@@ -543,5 +628,6 @@ int main() {
     testAnchorFollowsDeform();
     testAnchorSurvivesSaveLoad();
     testCoordinateSpacesAreDistinct();
+    testGlobalGradientTurnsLevel();
     return lstest::report("dither");
 }
