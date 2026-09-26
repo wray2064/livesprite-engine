@@ -327,6 +327,12 @@ IntervalSet rasterizeAreaThrough(const AreaDesc& desc, const Mat3f& matrix);
 IntervalSet rasterizeAreaAlong(const AreaDesc& desc, const PointMap& map);
 // The contours of a set of pixels, along their edges.
 AreaDesc traceArea(const IntervalSet& set);
+// Pixels made marks, for pixels that come from outside -- an image, a paste,
+// an old document: every part one pixel wide a pixel-perfect path through its
+// centres, the rest areas, a path that meets an area running a pixel on into
+// it. As drawn they are exactly those pixels; turned, a line is drawn again as
+// a line, where an area's one-pixel necks would come apart.
+StrokesDesc traceStrokes(const IntervalSet& pixels);
 // The centre of the pixel furthest inside a set: a seed that stays inside
 // whatever the set is turned or scaled to.
 Vec2f deepestPoint(const IntervalSet& set);

@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <deque>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1416,6 +1417,176 @@ AreaDesc traceArea(const IntervalSet& set) {
         }
     }
     return area;
+}
+
+StrokesDesc traceStrokes(const IntervalSet& pixels) {
+    StrokesDesc out;
+    const PixelSet all = toPixelSet(normalize(pixels));
+    if (all.empty()) {
+        return out;
+    }
+    const auto in = [&all](int32_t x, int32_t y) { return all.count(pixelKey(x, y)) != 0; };
+
+    // Thick: every pixel of a two-by-two block wholly inside. What is left is
+    // one pixel wide.
+    PixelSet thick;
+    for (uint64_t key : all) {
+        const int32_t x = keyX(key);
+        const int32_t y = keyY(key);
+        if (in(x + 1, y) && in(x, y + 1) && in(x + 1, y + 1)) {
+            thick.insert(key);
+            thick.insert(pixelKey(x + 1, y));
+            thick.insert(pixelKey(x, y + 1));
+            thick.insert(pixelKey(x + 1, y + 1));
+        }
+    }
+    if (!thick.empty()) {
+        PenStroke area;
+        area.kind = PenKind::Area;
+        area.area = traceArea(fromPixelSet(thick));
+        out.strokes.push_back(std::move(area));
+    }
+
+    // The thin pixels as a graph: side by side are joined, and corner to
+    // corner only where no pixel beside both joins them already -- so an L
+    // is a bend, not a triangle.
+    std::vector<Vec2i> nodes;
+    std::unordered_map<uint64_t, int> index;
+    for (uint64_t key : all) {
+        if (thick.count(key) == 0) {
+            index.emplace(key, static_cast<int>(nodes.size()));
+            nodes.push_back({ keyX(key), keyY(key) });
+        }
+    }
+    // In a steady order, so the same pixels always make the same marks.
+    std::vector<int> order(nodes.size());
+    for (size_t i = 0; i < order.size(); ++i) {
+        order[i] = static_cast<int>(i);
+    }
+    std::sort(order.begin(), order.end(), [&nodes](int a, int b) {
+        return nodes[a].y != nodes[b].y ? nodes[a].y < nodes[b].y : nodes[a].x < nodes[b].x;
+    });
+    const auto thin = [&index](int32_t x, int32_t y) {
+        auto found = index.find(pixelKey(x, y));
+        return found == index.end() ? -1 : found->second;
+    };
+    std::vector<std::vector<int>> links(nodes.size());
+    for (int i : order) {
+        const Vec2i p = nodes[static_cast<size_t>(i)];
+        static const int kSides[4][2] = { {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
+        for (const auto& d : kSides) {
+            const int j = thin(p.x + d[0], p.y + d[1]);
+            if (j >= 0) {
+                links[static_cast<size_t>(i)].push_back(j);
+            }
+        }
+        static const int kCorners[4][2] = { {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };
+        for (const auto& d : kCorners) {
+            const int j = thin(p.x + d[0], p.y + d[1]);
+            if (j >= 0 && !in(p.x + d[0], p.y) && !in(p.x, p.y + d[1])) {
+                links[static_cast<size_t>(i)].push_back(j);
+            }
+        }
+    }
+
+    std::set<std::pair<int, int>> walked;
+    const auto edge = [](int a, int b) { return std::make_pair(std::min(a, b), std::max(a, b)); };
+    // Where a path ends beside an area, it runs a pixel on into it, so the
+    // two stay joined wherever they are turned.
+    const auto intoArea = [&](int end, std::vector<Vec2f>& points, bool atFront) {
+        if (thick.empty()) {
+            return;
+        }
+        const Vec2i p = nodes[static_cast<size_t>(end)];
+        static const int kNear[8][2] = { {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+                                         {1, 1}, {1, -1}, {-1, 1}, {-1, -1} };
+        for (const auto& d : kNear) {
+            if (thick.count(pixelKey(p.x + d[0], p.y + d[1])) != 0) {
+                const Vec2f at { static_cast<float>(p.x + d[0]) + 0.5f,
+                                 static_cast<float>(p.y + d[1]) + 0.5f };
+                points.insert(atFront ? points.begin() : points.end(), at);
+                return;
+            }
+        }
+    };
+    const auto centre = [&nodes](int i) {
+        return Vec2f{ static_cast<float>(nodes[static_cast<size_t>(i)].x) + 0.5f,
+                      static_cast<float>(nodes[static_cast<size_t>(i)].y) + 0.5f };
+    };
+    const auto addPath = [&out](std::vector<Vec2f> points) {
+        PenStroke line;
+        line.points = std::move(points);
+        out.strokes.push_back(std::move(line));
+    };
+    // Walks from `from` through `next` until the path reaches an end, a
+    // fork, or where it began.
+    const auto walk = [&](int from, int next) {
+        std::vector<int> path { from };
+        int previous = from;
+        int current = next;
+        walked.insert(edge(from, next));
+        while (true) {
+            path.push_back(current);
+            if (current == from || links[static_cast<size_t>(current)].size() != 2) {
+                break;
+            }
+            int onward = -1;
+            for (int candidate : links[static_cast<size_t>(current)]) {
+                if (candidate != previous && walked.count(edge(current, candidate)) == 0) {
+                    onward = candidate;
+                    break;
+                }
+            }
+            if (onward < 0) {
+                break;
+            }
+            walked.insert(edge(current, onward));
+            previous = current;
+            current = onward;
+        }
+        return path;
+    };
+    const auto lay = [&](const std::vector<int>& path) {
+        std::vector<Vec2f> points;
+        for (int i : path) {
+            points.push_back(centre(i));
+        }
+        if (path.front() != path.back()) {
+            if (links[static_cast<size_t>(path.front())].size() <= 1) {
+                intoArea(path.front(), points, true);
+            }
+            if (links[static_cast<size_t>(path.back())].size() <= 1) {
+                intoArea(path.back(), points, false);
+            }
+        }
+        addPath(std::move(points));
+    };
+    // Paths from every end and fork first; what is left is loops.
+    for (int i : order) {
+        const std::vector<int>& next = links[static_cast<size_t>(i)];
+        if (next.empty()) {
+            std::vector<Vec2f> points { centre(i) };
+            intoArea(i, points, false);
+            addPath(std::move(points));
+            continue;
+        }
+        if (next.size() == 2) {
+            continue;
+        }
+        for (int j : next) {
+            if (walked.count(edge(i, j)) == 0) {
+                lay(walk(i, j));
+            }
+        }
+    }
+    for (int i : order) {
+        for (int j : links[static_cast<size_t>(i)]) {
+            if (walked.count(edge(i, j)) == 0) {
+                lay(walk(i, j));
+            }
+        }
+    }
+    return out;
 }
 
 Vec2f deepestPoint(const IntervalSet& set) {

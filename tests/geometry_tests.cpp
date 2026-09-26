@@ -482,7 +482,61 @@ void testStrokesWithATip() {
     LS_CHECK(slanted >= 9 && slanted <= 16);
 }
 
+// Pixels from outside made marks: a blob, a line out of it, a ring and a lone
+// pixel. As drawn, exactly those pixels; turned, still three pieces -- the
+// line joined to the blob -- and the ring still closed.
+void testPixelsBecomeStrokes() {
+    IntervalSet pixels;
+    const auto add = [&pixels](int x, int y) { pixels.intervals.push_back({ y, x, x + 1 }); };
+    for (int y = 10; y < 16; ++y) {
+        for (int x = 10; x < 16; ++x) {
+            add(x, y);
+        }
+    }
+    for (int x = 16; x < 26; ++x) {
+        add(x, 12);
+    }
+    for (int i = 0; i <= 10; ++i) {
+        add(30 + i, 4);
+        add(30 + i, 14);
+        add(30, 4 + i);
+        add(40, 4 + i);
+    }
+    add(5, 30);
+    pixels = geom::normalize(pixels);
+
+    const StrokesDesc marks = geom::traceStrokes(pixels);
+    LS_CHECK(geom::xorSets(geom::rasterizeStrokes(marks), pixels).empty());
+    int lines = 0;
+    int areas = 0;
+    for (const PenStroke& mark : marks.strokes) {
+        (mark.kind == PenKind::Area ? areas : lines) += 1;
+    }
+    LS_CHECK(areas == 1);
+    LS_CHECK(lines >= 3);
+
+    for (float angle : { 17.f, 30.f, 45.f, 71.f }) {
+        const IntervalSet turned = geom::rasterizeStrokesThrough(
+            marks, Mat3f::aroundPivot(Mat3f::rotation(angle), { 24.f, 20.f }));
+        const std::vector<IntervalSet> pieces = geom::connectedComponents(turned, true);
+        int enclosing = 0;
+        for (const IntervalSet& piece : pieces) {
+            const Rect2i box = geom::bounds(piece);
+            const Rect2i around { { box.min.x - 1, box.min.y - 1 }, { box.max.x + 1, box.max.y + 1 } };
+            enclosing += geom::connectedComponents(geom::invertSet(piece, around), false).size() >= 2
+                ? 1 : 0;
+        }
+        LS_CHECK(pieces.size() == 3);
+        LS_CHECK(enclosing == 1);
+        if (pieces.size() != 3 || enclosing != 1) {
+            std::printf("    traced, turned %.0f: %d pieces, %d enclosing\n",
+                        static_cast<double>(angle), static_cast<int>(pieces.size()), enclosing);
+        }
+    }
+}
+
 int main() {
+    testPixelsBecomeStrokes();
     testStrokesWithATip();
     testScaledStrokesLandOnThePixels();
     testStrokesDrawWhatWasDrawn();
