@@ -130,9 +130,11 @@ memory. Ours is deliberately stated rather than discovered.
 
 - **A sprite has one parent.** A fan-in rig, where one part hangs off two
   sockets, needs explicit duplication.
-- **Free-form deforms are approximate for coverage.** Bend, warp, lattice,
-  envelope, pin, weighted, boundary and path deforms forward-map with hole
-  repair, so a heavy deform can leave artefacts an affine transform would not.
+- **Free-form deforms of pixels are approximate.** Shapes go through a deform
+  as shapes, but a layer still holding pixels, or with an effect before the
+  deform, is forward-mapped with hole repair, and a heavy deform can leave
+  artefacts there. A deform that folds the plane over itself moves a shape's
+  outline, so the fold is not filled in.
 - **`compilePreview` clamps rather than downscales.** Asking for a smaller
   preview of a large canvas gives you a crop of the canvas size, not a scaled
   image. Scale on your side.

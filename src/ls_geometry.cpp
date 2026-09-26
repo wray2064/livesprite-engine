@@ -1002,10 +1002,6 @@ void stamp(PixelSet& into, Vec2i at, const std::vector<Vec2i>& footprint) {
     }
 }
 
-// One stroke's pixels. As drawn (`matrix` null) the points are the pixels
-// laid down, joined where the pointer jumped. Moved, the path is simplified
-// back to the lines the hand drew -- the stair of pixels a straight line
-// leaves is not the line -- moved, and walked again where it lands.
 // A brush stamp `w` by `h`, as offsets from the pixel it is placed on --
 // brushFootprint's rule, stretched: a brush on a layer scaled more one way
 // than the other is stretched with it, and stays level with the grid.
@@ -1033,46 +1029,56 @@ std::vector<Vec2i> stretchedFootprint(int w, int h, bool round) {
     return out;
 }
 
-// One stroke's pixels. As drawn (`matrix` null) the points are the pixels
+// How a stroke moves: by a matrix, or by a map of the plane that is not
+// one (see PointMap). Null for a stroke drawn where it was made.
+struct Mover {
+    const Mat3f* matrix = nullptr;
+    const PointMap* map = nullptr;
+    Vec2f apply(Vec2f p) const { return matrix != nullptr ? matrix->transformPoint(p) : (*map)(p); }
+    // How far a step of one pixel across, and one down, goes near `p`.
+    Vec2f stretchAt(Vec2f p) const {
+        if (matrix != nullptr) {
+            return { std::sqrt(matrix->m[0] * matrix->m[0] + matrix->m[3] * matrix->m[3]),
+                     std::sqrt(matrix->m[1] * matrix->m[1] + matrix->m[4] * matrix->m[4]) };
+        }
+        const Vec2f here = (*map)(p);
+        const Vec2f across = (*map)({ p.x + 1.f, p.y });
+        const Vec2f down = (*map)({ p.x, p.y + 1.f });
+        return { std::sqrt((across.x - here.x) * (across.x - here.x) + (across.y - here.y) * (across.y - here.y)),
+                 std::sqrt((down.x - here.x) * (down.x - here.x) + (down.y - here.y) * (down.y - here.y)) };
+    }
+};
+
+// One stroke's pixels. As drawn (`mover` null) the points are the pixels
 // laid down, joined where the pointer jumped. Moved, the path is simplified
 // back to the lines the hand drew -- the stair of pixels a straight line
 // leaves is not the line -- moved, and walked again where it lands, the brush
 // stretched as the move stretches each axis. A brush an even number of pixels
 // across sits on the corner between pixels, not on a pixel, so the walk for
 // it runs half a pixel up and to the left: that is what lands a line doubled
-// in size exactly on the pixels of the line, doubled.
-PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
+// in size exactly on the pixels of the line, doubled. Moved by a map that is
+// not a matrix, the simplified path is cut into half-pixel steps first, so it
+// bends where the map bends.
+PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
     PixelSet pixels;
     if (stroke.points.empty() && stroke.kind != PenKind::Area) {
         return pixels;
     }
-    const float scaleX = matrix == nullptr ? 1.f
-        : std::sqrt(matrix->m[0] * matrix->m[0] + matrix->m[3] * matrix->m[3]);
-    const float scaleY = matrix == nullptr ? 1.f
-        : std::sqrt(matrix->m[1] * matrix->m[1] + matrix->m[4] * matrix->m[4]);
-    const auto sizeOf = [&](size_t i) {
-        return i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
-    };
-    const auto widthAt = [&](size_t i) { return scaledSize(sizeOf(i), scaleX); };
-    const auto heightAt = [&](size_t i) { return scaledSize(sizeOf(i), scaleY); };
-    std::map<std::pair<int, int>, std::vector<Vec2i>> footprints;
-    const auto footprintOf = [&](int w, int h) -> const std::vector<Vec2i>& {
-        auto found = footprints.find({ w, h });
-        if (found == footprints.end()) {
-            found = footprints.emplace(std::make_pair(w, h), stretchedFootprint(w, h, stroke.round)).first;
-        }
-        return found->second;
+    const bool bends = mover != nullptr && mover->matrix == nullptr;
+    const auto densified = [bends](std::vector<Vec2f> points, bool closed) {
+        return bends ? densifyPath(points, closed) : points;
     };
 
     if (stroke.kind == PenKind::Area) {
         IntervalSet area;
-        if (matrix == nullptr) {
+        if (mover == nullptr) {
             area = fillContours(stroke.area.contours);
         } else {
-            std::vector<std::vector<Vec2f>> moved = stroke.area.contours;
-            for (auto& contour : moved) {
-                for (Vec2f& p : contour) {
-                    p = matrix->transformPoint(p);
+            std::vector<std::vector<Vec2f>> moved;
+            for (const auto& contour : stroke.area.contours) {
+                moved.push_back(densified(contour, true));
+                for (Vec2f& p : moved.back()) {
+                    p = mover->apply(p);
                 }
             }
             area = fillContours(moved);
@@ -1084,6 +1090,21 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
         }
         return pixels;
     }
+
+    const Vec2f stretch = mover == nullptr ? Vec2f{ 1.f, 1.f } : mover->stretchAt(stroke.points.front());
+    const auto sizeOf = [&](size_t i) {
+        return i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
+    };
+    const auto widthAt = [&](size_t i) { return scaledSize(sizeOf(i), stretch.x); };
+    const auto heightAt = [&](size_t i) { return scaledSize(sizeOf(i), stretch.y); };
+    std::map<std::pair<int, int>, std::vector<Vec2i>> footprints;
+    const auto footprintOf = [&](int w, int h) -> const std::vector<Vec2i>& {
+        auto found = footprints.find({ w, h });
+        if (found == footprints.end()) {
+            found = footprints.emplace(std::make_pair(w, h), stretchedFootprint(w, h, stroke.round)).first;
+        }
+        return found->second;
+    };
     // Where a stamp that big is placed for a point: its pixel, or for an even
     // brush the pixel up and to the left of the corner nearest it.
     const auto placeOf = [](Vec2f at, int w, int h) {
@@ -1092,8 +1113,7 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
     };
     if (stroke.kind == PenKind::Dots) {
         for (size_t i = 0; i < stroke.points.size(); ++i) {
-            const Vec2f at = matrix == nullptr ? stroke.points[i]
-                                               : matrix->transformPoint(stroke.points[i]);
+            const Vec2f at = mover == nullptr ? stroke.points[i] : mover->apply(stroke.points[i]);
             const int w = widthAt(i);
             const int h = heightAt(i);
             stamp(pixels, placeOf(at, w, h), footprintOf(w, h));
@@ -1107,16 +1127,17 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
     for (size_t i = 0; i < from.size(); ++i) {
         from[i] = i;
     }
-    if (matrix != nullptr && path.size() > 2 && stroke.sizes.empty()) {
+    if (mover != nullptr && path.size() > 2 && stroke.sizes.empty()) {
         SimplifyParams params;
         params.epsilon = 0.75f;
         params.preserveCorners = false;
         path = simplifyPath(path, params);
+        path = densified(path, false);
         from.assign(path.size(), 0);
     }
-    if (matrix != nullptr) {
+    if (mover != nullptr) {
         for (Vec2f& p : path) {
-            p = matrix->transformPoint(p);
+            p = mover->apply(p);
         }
     }
     // The walk runs over stamp places; the first point's brush says whether
@@ -1136,7 +1157,7 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
         }
     }
     const bool oneWide = stroke.sizes.empty() && firstW <= 1 && firstH <= 1;
-    if (matrix != nullptr && oneWide && stroke.pixelPerfect) {
+    if (mover != nullptr && oneWide && stroke.pixelPerfect) {
         walk = withoutCorners(walk);
         walkFrom.assign(walk.size(), 0);
     }
@@ -1151,11 +1172,11 @@ bool isThin(const PenStroke& stroke) {
     return stroke.kind != PenKind::Area && stroke.sizes.empty() && stroke.size <= 1.f;
 }
 
-IntervalSet strokesPixels(const StrokesDesc& desc, const Mat3f* matrix) {
+IntervalSet strokesPixels(const StrokesDesc& desc, const Mover* mover) {
     IntervalSet thin;
     IntervalSet solid;
     for (const PenStroke& stroke : desc.strokes) {
-        const IntervalSet mark = fromPixelSet(strokePixels(stroke, matrix));
+        const IntervalSet mark = fromPixelSet(strokePixels(stroke, mover));
         if (stroke.erase) {
             solid = subtractSets(solid, mark);
         } else if (isThin(stroke)) {
@@ -1265,7 +1286,38 @@ IntervalSet rasterizeStrokesThrough(const StrokesDesc& desc, const Mat3f& matrix
     if (keepsPixelGrid(matrix)) {
         return mapAcrossGrid(strokesPixels(desc, nullptr), matrix);
     }
-    return strokesPixels(desc, &matrix);
+    Mover mover;
+    mover.matrix = &matrix;
+    return strokesPixels(desc, &mover);
+}
+
+IntervalSet rasterizeStrokesAlong(const StrokesDesc& desc, const PointMap& map) {
+    Mover mover;
+    mover.map = &map;
+    return strokesPixels(desc, &mover);
+}
+
+std::vector<Vec2f> densifyPath(const std::vector<Vec2f>& points, bool closed, float step) {
+    if (points.size() < 2) {
+        return points;
+    }
+    const float safeStep = std::max(0.05f, step);
+    std::vector<Vec2f> out;
+    const size_t segments = closed ? points.size() : points.size() - 1;
+    for (size_t i = 0; i < segments; ++i) {
+        const Vec2f a = points[i];
+        const Vec2f b = points[(i + 1) % points.size()];
+        const float length = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
+        const int steps = std::max(1, std::min(4096, static_cast<int>(std::ceil(length / safeStep))));
+        for (int k = 0; k < steps; ++k) {
+            const float t = static_cast<float>(k) / static_cast<float>(steps);
+            out.push_back({ a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t });
+        }
+    }
+    if (!closed) {
+        out.push_back(points.back());
+    }
+    return out;
 }
 
 IntervalSet rasterizeAreaDesc(const AreaDesc& desc) {
@@ -1280,6 +1332,17 @@ IntervalSet rasterizeAreaThrough(const AreaDesc& desc, const Mat3f& matrix) {
     for (auto& contour : moved) {
         for (Vec2f& p : contour) {
             p = matrix.transformPoint(p);
+        }
+    }
+    return fillContours(moved);
+}
+
+IntervalSet rasterizeAreaAlong(const AreaDesc& desc, const PointMap& map) {
+    std::vector<std::vector<Vec2f>> moved;
+    for (const auto& contour : desc.contours) {
+        moved.push_back(densifyPath(contour, true));
+        for (Vec2f& p : moved.back()) {
+            p = map(p);
         }
     }
     return fillContours(moved);

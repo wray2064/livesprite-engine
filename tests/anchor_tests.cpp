@@ -546,8 +546,15 @@ void testBoundaryFalloffIsShared() {
     LS_CHECK(near(core, 1.f, 0.001f));
     LS_CHECK(ctx->getBoundaryInfluence(boundary, {2.f, 2.f}).value == 0.f);
 
-    // A squash scoped to that boundary moves interior pixels further than edge
-    // pixels: the compiler is reading the same gradient.
+    // A squash scoped to that boundary moves what is deep inside further than
+    // what is near its edge: the compiler is reading the same gradient. The
+    // blob's own outline lies where the influence is nothing and stays put,
+    // so it carries a mark inside, in the soft band, for the squash to move.
+    const GeometryId spot = ctx->createRect(doc.value, {{16.f, 21.f}, 4.f, 6.f, 0.f}).value;
+    FillSolidOp spotFill;
+    spotFill.targetRegion = ctx->createRegionFromGeometry(spot).value;
+    spotFill.fallbackColor = Color{ 200, 40, 40, 255 };
+    LS_CHECK(ctx->addOperation(blob.layer, spotFill).ok());
     auto flat = ctx->compileSprite(blob.sprite, exportProfile());
     LS_REQUIRE(flat.ok());
 

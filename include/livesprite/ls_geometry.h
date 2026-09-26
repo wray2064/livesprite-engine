@@ -6,6 +6,8 @@
 
 #include "ls_types.h"
 
+#include <functional>
+
 #include <vector>
 
 namespace ls {
@@ -270,6 +272,13 @@ IntervalSet rasterizeCurve(const CurveDesc& desc);
 bool keepsPixelGrid(const Mat3f& matrix);
 IntervalSet mapAcrossGrid(const IntervalSet& set, const Mat3f& matrix);
 
+// A move of the plane that is not one matrix -- a bend, a warp, a lattice:
+// where each point goes. Shapes moved by one are cut into steps no longer
+// than half a pixel first (densifyPath), so a bent line bends rather than
+// jumping from corner to corner.
+using PointMap = std::function<Vec2f(Vec2f)>;
+std::vector<Vec2f> densifyPath(const std::vector<Vec2f>& points, bool closed, float step = 0.5f);
+
 // A line one pixel wide through the points, the way a pixel artist draws one:
 // the pixels in the order the path visits them, without the doubled L corners
 // a stair of short segments leaves. Closed, the last point joins the first.
@@ -287,8 +296,10 @@ IntervalSet rasterizeArea(const std::vector<Vec2f>& outline, bool bySpans = fals
 std::vector<Vec2i> brushFootprint(int size, bool round);
 IntervalSet rasterizeStrokes(const StrokesDesc& desc);
 IntervalSet rasterizeStrokesThrough(const StrokesDesc& desc, const Mat3f& matrix);
+IntervalSet rasterizeStrokesAlong(const StrokesDesc& desc, const PointMap& map);
 IntervalSet rasterizeAreaDesc(const AreaDesc& desc);
 IntervalSet rasterizeAreaThrough(const AreaDesc& desc, const Mat3f& matrix);
+IntervalSet rasterizeAreaAlong(const AreaDesc& desc, const PointMap& map);
 // The contours of a set of pixels, along their edges.
 AreaDesc traceArea(const IntervalSet& set);
 // The centre of the pixel furthest inside a set: a seed that stays inside

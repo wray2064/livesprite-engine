@@ -990,9 +990,18 @@ private:
     struct LayerCloneTables;
     Result<LayerId> cloneLayerInto(LayerId source, SpriteId into, int32_t atIndex,
                                    LayerCloneTables& tables);
+    //
+    // `placement`, when given, is where the layer's sprite is put -- its own
+    // transform, and its place in an assembly -- as one last move for every
+    // mark, so a placed sprite's shapes land there rather than a picture of them.
     Result<CompileResult> compileLayerWithin(LayerId id, const CompileProfile& profile,
                                              const RasterBuffer* spriteSilhouette,
-                                             bool suppressSpriteOutlines) const;
+                                             bool suppressSpriteOutlines,
+                                             const Mat3f* placement = nullptr) const;
+    // compileSprite, put by `placement` on top of its own transform: how an
+    // assembly compiles each sprite in it.
+    Result<CompileResult> compileSpriteWithin(SpriteId id, const CompileProfile& profile,
+                                              const Mat3f* placement);
 
     std::unique_ptr<Impl> impl_;
     LSContext();

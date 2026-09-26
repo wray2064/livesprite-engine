@@ -852,6 +852,78 @@ IntervalSet LSContext::Impl::rasterizeGeometryThrough(const GeometryData& data,
     }, data.shape);
 }
 
+IntervalSet LSContext::Impl::rasterizeGeometryAlong(const GeometryData& data,
+                                                   const geom::PointMap& map) const {
+    // Every edge cut into half-pixel steps before it moves, so a bent edge
+    // bends rather than cutting straight from corner to corner.
+    const auto moved = [&map](const std::vector<Vec2f>& points, bool closed) {
+        std::vector<Vec2f> out = geom::densifyPath(points, closed);
+        for (Vec2f& p : out) {
+            p = map(p);
+        }
+        return out;
+    };
+    return std::visit([&](const auto& shape) -> IntervalSet {
+        using Shape = std::decay_t<decltype(shape)>;
+        if constexpr (std::is_same_v<Shape, PointDesc>) {
+            return geom::rasterizePoint({ map(shape.position) });
+        } else if constexpr (std::is_same_v<Shape, LineDesc>) {
+            return geom::rasterizePixelWalk(moved({ shape.start, shape.end }, false), false);
+        } else if constexpr (std::is_same_v<Shape, PolylineDesc>) {
+            if (shape.closed && shape.points.size() >= 3) {
+                const std::vector<Vec2f> points = moved(shape.points, true);
+                return geom::unionSets(geom::rasterizeArea(points),
+                                       geom::rasterizePixelWalk(points, true));
+            }
+            if (shape.points.size() == 1) {
+                return geom::rasterizePoint({ map(shape.points.front()) });
+            }
+            return geom::rasterizePixelWalk(moved(shape.points, false), false);
+        } else if constexpr (std::is_same_v<Shape, RectDesc>) {
+            if (shape.width <= 0.f || shape.height <= 0.f) {
+                return IntervalSet{};
+            }
+            return geom::rasterizeArea(moved(rectOutline(shape), true));
+        } else if constexpr (std::is_same_v<Shape, EllipseDesc>) {
+            if (shape.radiusX <= 0.f || shape.radiusY <= 0.f) {
+                return IntervalSet{};
+            }
+            return geom::rasterizeArea(moved(ellipseOutline(shape.center, shape.radiusX,
+                                                            shape.radiusY), true), true);
+        } else if constexpr (std::is_same_v<Shape, CircleDesc>) {
+            if (shape.radius <= 0.f) {
+                return IntervalSet{};
+            }
+            return geom::rasterizeArea(moved(ellipseOutline(shape.center, shape.radius,
+                                                            shape.radius), true), true);
+        } else if constexpr (std::is_same_v<Shape, PolygonDesc>) {
+            const std::vector<Vec2f> points = moved(shape.vertices, true);
+            IntervalSet area = geom::rasterizeArea(points);
+            if (shape.includeEdges && !points.empty()) {
+                area = geom::unionSets(area, geom::rasterizePixelWalk(points, true));
+            }
+            return area;
+        } else if constexpr (std::is_same_v<Shape, StrokesDesc>) {
+            return geom::rasterizeStrokesAlong(shape, map);
+        } else if constexpr (std::is_same_v<Shape, AreaDesc>) {
+            return geom::rasterizeAreaAlong(shape, map);
+        } else if constexpr (std::is_same_v<Shape, FaceDesc>) {
+            return geom::rasterizeAreaAlong(shape.area, map);
+        } else {
+            const std::vector<Vec2f> path = geom::flattenCurve(shape);
+            if (path.size() < 2) {
+                return path.empty() ? IntervalSet{} : geom::rasterizePoint({ map(path.front()) });
+            }
+            const std::vector<Vec2f> points = moved(path, shape.closed);
+            if (shape.closed) {
+                return geom::unionSets(geom::rasterizeArea(points),
+                                       geom::rasterizePixelWalk(points, true));
+            }
+            return geom::rasterizePixelWalk(points, false);
+        }
+    }, data.shape);
+}
+
 std::vector<Vec2f> LSContext::Impl::geometryPath(const GeometryData& data) const {
     return std::visit([](const auto& shape) -> std::vector<Vec2f> {
         using Shape = std::decay_t<decltype(shape)>;

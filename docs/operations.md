@@ -142,10 +142,19 @@ the sprite transform).
 | `BoundaryDeformOp` | Maps a region toward a target shape |
 | `PathDeformOp` | Bends content along a path, optionally following its tangent |
 
-Deforms are forward-mapped with hole repair, unlike the affine transforms which
-resolve coverage geometrically. A `boundary` scopes a deform and supplies a
-falloff; the influence a boundary reports through `getBoundaryInfluence` is
-exactly the influence the compiler applies.
+A deform moves geometry, as the affine transforms do: every shape drawn before
+it is carried through its map point by point -- edges cut into half-pixel steps
+first, so a straight edge bends -- and rasterized where it lands, so a bent
+line is still a closed line and the fill inside it still meets it. A bend,
+lattice, path, envelope or boundary deform lays itself over the bounds of what
+the layer has drawn by then, measured from those shapes. A layer that still
+holds pixels, or an effect before the deform, is forward-mapped as a picture
+with hole repair instead.
+
+A `boundary` scopes a deform and supplies a falloff; the influence a boundary
+reports through `getBoundaryInfluence` is exactly the influence the compiler
+applies. What lies where that influence is nothing stays put -- a shape whose
+outline is the boundary keeps its outline, and what is inside it moves.
 
 ## Plugin operations
 

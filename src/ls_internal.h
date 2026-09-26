@@ -410,6 +410,8 @@ struct LSContext::Impl {
     void refreshRegion(RegionData& region) const;
     // The shape moved by `matrix`, then rasterized where it lands.
     IntervalSet rasterizeGeometryThrough(const GeometryData& data, const Mat3f& matrix) const;
+    // The same, moved by a map of the plane that is not one matrix (a deform).
+    IntervalSet rasterizeGeometryAlong(const GeometryData& data, const geom::PointMap& map) const;
     std::vector<Vec2f> geometryPath(const GeometryData& data) const;
 
     // --- compile helpers (implemented in ls_compile.cpp) -------------------

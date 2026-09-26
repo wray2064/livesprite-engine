@@ -61,6 +61,13 @@ resolution, region compilation, fill and stroke rasterization, transform and
 deform resolution, layer and group compositing, sampling, palette quantization,
 alpha policy.
 
+**Geometry first.** A layer whose marks are shapes compiles by moving each
+shape through every transform and deform after it -- and then through the
+sprite's own transform and its place in an assembly -- and rasterizing it
+where it lands. That is the only place pixels enter. A layer that holds pixels,
+or has an effect (an outline, a shadow, a plugin) before a move, takes the
+older path: drawn, then moved as one picture.
+
 A `CompileProfile` decides what kind of answer you want:
 
 | Profile type | For |
@@ -154,8 +161,10 @@ Separately, `CoordinateSpace` says where *gradient geometry* is measured:
   own pivots, with an optional joint offset and a flag to composite behind the
   parent. Chains resolve to any depth; a cycle is refused rather than built.
 
-`compileAssembly` compiles every sprite in the tree from its own operations and
-places it by the chain, so an articulated figure renders in one call.
+`compileAssembly` compiles every sprite in the tree from its own operations,
+where the chain puts it, so an articulated figure renders in one call. The
+placement is the last move each of its marks takes, so a sprite its parent
+turns is drawn turned rather than drawn and then turned as a picture.
 
 ## Dependencies and caching
 

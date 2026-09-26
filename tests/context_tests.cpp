@@ -924,6 +924,221 @@ void testRotatedOutlinesStayClosed(LSContext& ctx) {
     }
 }
 
+// Bent, or put somewhere by its sprite, a drawing is moved as the shapes it
+// is and drawn where it lands: its line stays closed through a bend, a warp,
+// pins and a lattice, and through a turn of the sprite or of the sprite it
+// hangs from, and its fill still meets that line.
+void testDeformsAndPlacementMoveShapes(LSContext& ctx) {
+    constexpr int kSize = 64;
+    constexpr float kMid = 32.f;
+    const Color orange {230, 140, 60, 255};
+    const Color blue {30, 70, 110, 255};
+    std::vector<Vec2f> wobble;
+    for (int i = 0; i < 180; ++i) {
+        const float t = static_cast<float>(i) / 180.f * 6.2831853f;
+        const float r = 13.f + 3.f * std::sin(5.f * t);
+        wobble.push_back({ kMid + r * std::cos(t), kMid + r * std::sin(t) });
+    }
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Debug;
+    profile.outputWidth = kSize;
+    profile.outputHeight = kSize;
+    profile.palette = PalettePolicy::Unconstrained;
+
+    // What a pencil draws round the wobble, and what a paint bucket keeps of
+    // its flood inside that line: the pixels it reached, traced.
+    StrokesDesc pencil;
+    PenStroke ring;
+    ring.points = wobble;
+    ring.points.push_back(wobble.front());
+    pencil.strokes.push_back(ring);
+    FaceDesc face;
+    {
+        std::vector<uint8_t> wall(kSize * kSize, 0);
+        for (const Interval& run : geom::rasterizeStrokes(pencil).intervals) {
+            for (int32_t x = run.x0; x < run.x1; ++x) {
+                wall[run.y * kSize + x] = 1;
+            }
+        }
+        IntervalSet inside;
+        std::vector<Vec2i> stack { { static_cast<int32_t>(kMid), static_cast<int32_t>(kMid) } };
+        while (!stack.empty()) {
+            const Vec2i p = stack.back();
+            stack.pop_back();
+            if (p.x < 0 || p.y < 0 || p.x >= kSize || p.y >= kSize || wall[p.y * kSize + p.x]) {
+                continue;
+            }
+            wall[p.y * kSize + p.x] = 1;
+            inside.intervals.push_back({ p.y, p.x, p.x + 1 });
+            stack.push_back({p.x + 1, p.y}); stack.push_back({p.x - 1, p.y});
+            stack.push_back({p.x, p.y + 1}); stack.push_back({p.x, p.y - 1});
+        }
+        inside = geom::normalize(inside);
+        face.area = geom::traceArea(inside);
+        face.seed = geom::deepestPoint(inside);
+    }
+
+    // A line and its fill, as shapes: a filled shape with its edge, or what a
+    // pencil and a paint bucket make.
+    const auto drawBlob = [&](DocumentId doc, LayerId layer, bool bucket) {
+        if (bucket) {
+            FillSolidOp drawn;
+            drawn.targetRegion = ctx.createRegionFromGeometry(ctx.createStrokes(doc, pencil).value).value;
+            drawn.fallbackColor = orange;
+            LS_REQUIRE(ctx.addOperation(layer, drawn).ok());
+            FillSolidOp fill;
+            fill.targetRegion = ctx.createRegionFromGeometry(ctx.createFace(doc, face).value).value;
+            fill.fallbackColor = blue;
+            LS_REQUIRE(ctx.addOperation(layer, fill).ok());
+            return;
+        }
+        PolygonDesc area;
+        area.vertices = wobble;
+        const RegionId shape = ctx.createRegionFromGeometry(ctx.createPolygon(doc, area).value).value;
+        FillSolidOp fill;
+        fill.targetRegion = shape;
+        fill.fallbackColor = blue;
+        LS_REQUIRE(ctx.addOperation(layer, fill).ok());
+        StrokeRegionBoundaryOp edge;
+        edge.targetRegion = shape;
+        edge.fallbackColor = orange;
+        LS_REQUIRE(ctx.addOperation(layer, edge).ok());
+    };
+
+    // What every compile must show: a line closed round something, no fill
+    // outside it, and nothing bare between the two.
+    const auto closedAndFull = [&](const CompileResult& compiled, const std::string& what) {
+        std::vector<uint8_t> blocked(kSize * kSize, 0);
+        for (int y = 0; y < kSize; ++y) {
+            for (int x = 0; x < kSize; ++x) {
+                const Color c = readPixel(compiled.raster, x, y);
+                blocked[y * kSize + x] = c.a != 0 && c.r == orange.r ? 1 : 0;
+            }
+        }
+        std::vector<uint8_t> outside(kSize * kSize, 0);
+        std::vector<Vec2i> stack;
+        for (int i = 0; i < kSize; ++i) {
+            stack.push_back({i, 0}); stack.push_back({i, kSize - 1});
+            stack.push_back({0, i}); stack.push_back({kSize - 1, i});
+        }
+        while (!stack.empty()) {
+            const Vec2i p = stack.back();
+            stack.pop_back();
+            if (p.x < 0 || p.y < 0 || p.x >= kSize || p.y >= kSize) { continue; }
+            const int at = p.y * kSize + p.x;
+            if (outside[at] || blocked[at]) { continue; }
+            outside[at] = 1;
+            stack.push_back({p.x + 1, p.y}); stack.push_back({p.x - 1, p.y});
+            stack.push_back({p.x, p.y + 1}); stack.push_back({p.x, p.y - 1});
+        }
+        int enclosed = 0;
+        int leaked = 0;
+        int holes = 0;
+        for (int y = 0; y < kSize; ++y) {
+            for (int x = 0; x < kSize; ++x) {
+                const int at = y * kSize + x;
+                const Color c = readPixel(compiled.raster, x, y);
+                if (!outside[at] && !blocked[at]) {
+                    ++enclosed;
+                    holes += c.a == 0 ? 1 : 0;
+                }
+                leaked += outside[at] && c.a != 0 && c.b == blue.b ? 1 : 0;
+            }
+        }
+        // Moved as a picture would have said so.
+        bool asPicture = false;
+        for (const std::string& line : compiled.trace) {
+            asPicture = asPicture || line.find("as a picture") != std::string::npos ||
+                        line.find("over layer content") != std::string::npos;
+        }
+        LS_CHECK(enclosed > 100);
+        LS_CHECK(leaked == 0);
+        LS_CHECK(holes == 0);
+        LS_CHECK(!asPicture);
+        if (enclosed <= 100 || leaked != 0 || holes != 0 || asPicture) {
+            std::printf("    %s: %d enclosed, %d fill pixels outside, %d bare inside%s\n",
+                        what.c_str(), enclosed, leaked, holes, asPicture ? ", moved as a picture" : "");
+        }
+    };
+
+    for (int bucket = 0; bucket < 2; ++bucket) {
+        const std::string kind = bucket ? "pencil and bucket" : "shape and edge";
+
+        // Deforms: each laid over the drawing on a layer of its own.
+        for (int deform = 0; deform < 4; ++deform) {
+            auto doc = ctx.createDocument({"bent", kSize, kSize});
+            auto sprite = ctx.createSprite(doc.value);
+            auto layer = ctx.createLayer(sprite.value, {"blob"});
+            drawBlob(doc.value, layer.value, bucket != 0);
+            std::string name;
+            if (deform == 0) {
+                BendOp bend;
+                bend.targetLayer = layer.value;
+                bend.strength = 30.f;
+                LS_REQUIRE(ctx.addOperation(layer.value, bend).ok());
+                name = "bend";
+            } else if (deform == 1) {
+                WarpOp warp;
+                warp.targetLayer = layer.value;
+                warp.handlePoints = { { kMid + 12.f, kMid } };
+                warp.displacements = { { 6.f, -4.f } };
+                warp.radius = 12.f;
+                LS_REQUIRE(ctx.addOperation(layer.value, warp).ok());
+                name = "warp";
+            } else if (deform == 2) {
+                PinDeformOp pins;
+                pins.targetLayer = layer.value;
+                pins.pins = { { kMid - 14.f, kMid }, { kMid + 14.f, kMid } };
+                pins.pinTargets = { { kMid - 14.f, kMid - 4.f }, { kMid + 14.f, kMid + 5.f } };
+                pins.stiffness = 0.01f;
+                LS_REQUIRE(ctx.addOperation(layer.value, pins).ok());
+                name = "pins";
+            } else {
+                LatticeDeformOp lattice;
+                lattice.targetLayer = layer.value;
+                lattice.gridW = 2;
+                lattice.gridH = 2;
+                lattice.controlPoints = { { 14.f, 20.f }, { 50.f, 14.f }, { 17.f, 50.f }, { 47.f, 46.f } };
+                LS_REQUIRE(ctx.addOperation(layer.value, lattice).ok());
+                name = "lattice";
+            }
+            auto compiled = ctx.compileSprite(sprite.value, profile);
+            LS_REQUIRE(compiled.ok());
+            closedAndFull(compiled.value, kind + ", " + name);
+        }
+
+        // The sprite turned, and a sprite hung from a turned parent.
+        auto doc = ctx.createDocument({"placed", kSize, kSize});
+        auto sprite = ctx.createSprite(doc.value);
+        auto layer = ctx.createLayer(sprite.value, {"blob"});
+        drawBlob(doc.value, layer.value, bucket != 0);
+        auto parent = ctx.createSprite(doc.value);
+        LS_REQUIRE(ctx.createLayer(parent.value, {"nothing"}).ok());
+        const SocketId socket = ctx.addSocket(parent.value, {"middle", { kMid, kMid }, 0.f}).value;
+        const PivotId pivot = ctx.createPivot(sprite.value, PivotDesc{"middle", { kMid, kMid }}).value;
+        for (int angle = 11; angle < 360; angle += 37) {
+            const Mat3f turn = Mat3f::aroundPivot(Mat3f::rotation(static_cast<float>(angle)), { kMid, kMid });
+            LS_REQUIRE(ctx.setSpriteTransform(sprite.value, turn).ok());
+            auto turned = ctx.compileSprite(sprite.value, profile);
+            LS_REQUIRE(turned.ok());
+            closedAndFull(turned.value, kind + ", sprite turned " + std::to_string(angle));
+        }
+        LS_REQUIRE(ctx.setSpriteTransform(sprite.value, Mat3f::identity()).ok());
+        AttachmentDesc hang;
+        hang.socket = socket;
+        hang.childPivot = pivot;
+        LS_REQUIRE(ctx.attachSprite(sprite.value, hang).ok());
+        for (int angle = 11; angle < 360; angle += 37) {
+            const Mat3f turn = Mat3f::aroundPivot(Mat3f::rotation(static_cast<float>(angle)), { kMid, kMid });
+            LS_REQUIRE(ctx.setSpriteTransform(parent.value, turn).ok());
+            auto assembled = ctx.compileAssembly(parent.value, profile);
+            LS_REQUIRE(assembled.ok());
+            closedAndFull(assembled.value, kind + ", parent turned " + std::to_string(angle));
+        }
+    }
+}
+
 // A shape erased stays a shape: what was rubbed out is kept as the strokes
 // that rubbed it, so the hole goes where the shape goes, and a hole rubbed in
 // a filled shape does not grow an edge of its own.
@@ -1005,6 +1220,7 @@ int main() {
     testRotSprite(*ctx);
     testRotatedOutlinesStayClosed(*ctx);
     testErasingAShapeKeepsItAShape(*ctx);
+    testDeformsAndPlacementMoveShapes(*ctx);
 
     return lstest::report("context");
 }

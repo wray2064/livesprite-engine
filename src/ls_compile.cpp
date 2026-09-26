@@ -932,14 +932,106 @@ CompileProfile LSContext::Impl::resolveProfileDefaults(const CompileProfile& pro
 
 namespace {
 
+// A point that `map` sends to `target`, found by Newton's method from the
+// target stepped back by the map's own displacement there. A deform that
+// folds the plane over itself has more than one answer; this finds the one
+// nearest that start, or the closest it came.
+Vec2f pointBefore(const geom::PointMap& map, Vec2f target) {
+    const Vec2f first = map(target);
+    Vec2f x { 2.f * target.x - first.x, 2.f * target.y - first.y };
+    Vec2f best = target;
+    float bestMiss = (first.x - target.x) * (first.x - target.x) +
+                     (first.y - target.y) * (first.y - target.y);
+    constexpr float kStep = 0.25f;
+    for (int i = 0; i < 16 && bestMiss > 1e-6f; ++i) {
+        const Vec2f at = map(x);
+        const Vec2f miss { at.x - target.x, at.y - target.y };
+        const float missSq = miss.x * miss.x + miss.y * miss.y;
+        if (missSq < bestMiss) {
+            best = x;
+            bestMiss = missSq;
+        }
+        const Vec2f alongX = map({ x.x + kStep, x.y });
+        const Vec2f alongY = map({ x.x, x.y + kStep });
+        const float a = (alongX.x - at.x) / kStep;
+        const float b = (alongY.x - at.x) / kStep;
+        const float c = (alongX.y - at.y) / kStep;
+        const float d = (alongY.y - at.y) / kStep;
+        const float det = a * d - b * c;
+        if (std::fabs(det) < 1e-6f) {
+            break;
+        }
+        Vec2f step { (d * miss.x - b * miss.y) / det, (a * miss.y - c * miss.x) / det };
+        const float length = std::sqrt(step.x * step.x + step.y * step.y);
+        if (length > 4.f) {
+            step = { step.x * 4.f / length, step.y * 4.f / length };
+        }
+        x = { x.x - step.x, x.y - step.y };
+    }
+    return best;
+}
+
+// One step of the way a mark moves: a matrix, or a deform's map of the plane,
+// which no one matrix says.
+struct MoveStage {
+    Mat3f matrix;
+    Mat3f inverse;
+    geom::PointMap map;     // set for a deform, and then the matrices are unused
+};
+
 // How one mark moves when a layer is compiled geometry first (see
 // planGeometric): from the layer's own space to the output, through every
-// transform after it.
+// transform after it -- one matrix, or, when a deform is on the way, each
+// step of it in turn.
 struct MarkMove {
     Mat3f matrix;
     Mat3f inverse;
+    std::vector<MoveStage> stages;   // set when a deform is on the way
     SamplingPolicy sampling = SamplingPolicy::Center;   // used only for pixel regions
     bool moves = false;
+
+    bool affine() const { return stages.empty(); }
+
+    Vec2f apply(Vec2f p) const {
+        if (affine()) {
+            return matrix.transformPoint(p);
+        }
+        for (const MoveStage& stage : stages) {
+            p = stage.map ? stage.map(p) : stage.matrix.transformPoint(p);
+        }
+        return p;
+    }
+
+    // Where a point where the mark landed came from.
+    Vec2f back(Vec2f p) const {
+        if (affine()) {
+            return inverse.transformPoint(p);
+        }
+        for (auto stage = stages.rbegin(); stage != stages.rend(); ++stage) {
+            p = stage->map ? pointBefore(stage->map, p) : stage->inverse.transformPoint(p);
+        }
+        return p;
+    }
+
+    // The move as a map of the plane, good for as long as this move lives.
+    geom::PointMap map() const {
+        return [this](Vec2f p) { return apply(p); };
+    }
+
+    // How much the move stretches a width at `p`: the square root of the area
+    // it scales by there, so a turn keeps a line as wide as it was.
+    float stretchAt(Vec2f p) const {
+        if (affine()) {
+            return std::sqrt(std::fabs(matrix.determinant()));
+        }
+        constexpr float kReach = 0.5f;
+        const Vec2f at = apply(p);
+        const Vec2f alongX = apply({ p.x + kReach, p.y });
+        const Vec2f alongY = apply({ p.x, p.y + kReach });
+        const float det = ((alongX.x - at.x) * (alongY.y - at.y) -
+                           (alongY.x - at.x) * (alongX.y - at.y)) / (kReach * kReach);
+        return std::sqrt(std::fabs(det));
+    }
 };
 
 struct CompileEnv {
@@ -1014,19 +1106,28 @@ const IntervalSet* regionCoverage(const CompileEnv& env, RegionId id) {
     return region == nullptr ? nullptr : &region->coverage;
 }
 
+// A shape where a move lands it: moved, then rasterized.
+IntervalSet geometryThrough(const CompileEnv& env, const GeometryData& geometry,
+                            const MarkMove& move) {
+    return move.affine() ? env.impl->rasterizeGeometryThrough(geometry, move.matrix)
+                         : env.impl->rasterizeGeometryAlong(geometry, move.map());
+}
+
 // A face where a move lands it (see FaceDesc): found again, by a flood from
 // its seed moved, over what its layer drew before it, kept within two pixels
 // of its area moved -- so it fills up to the line around it however that line
 // was redrawn, and cannot run past it. A flood that gets further out than that
 // found nothing bounding it on this layer, and then the area moved is the fill.
-IntervalSet faceThrough(const FaceDesc& face, const Mat3f& matrix, const RasterBuffer* current) {
-    const IntervalSet area = geom::rasterizeAreaThrough(face.area, matrix);
-    if (geom::keepsPixelGrid(matrix) || current == nullptr || current->empty() || area.empty()) {
+IntervalSet faceThrough(const FaceDesc& face, const MarkMove& move, const RasterBuffer* current) {
+    const IntervalSet area = move.affine() ? geom::rasterizeAreaThrough(face.area, move.matrix)
+                                           : geom::rasterizeAreaAlong(face.area, move.map());
+    if ((move.affine() && geom::keepsPixelGrid(move.matrix)) || current == nullptr ||
+        current->empty() || area.empty()) {
         return area;
     }
     const IntervalSet reach = geom::expand(area, 2.f, true);
     const IntervalSet limit = geom::expand(area, 3.f, true);
-    const Vec2f seed = matrix.transformPoint(face.seed);
+    const Vec2f seed = move.apply(face.seed);
     const IntervalSet found = geom::floodRaster(
         *current, { static_cast<int32_t>(std::floor(seed.x)), static_cast<int32_t>(std::floor(seed.y)) },
         face.tolerance, face.diagonal, &limit);
@@ -1050,14 +1151,14 @@ IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& mo
     }
     if (const GeometryData* geometry = env.impl->findGeometry(region->source)) {
         const FaceDesc* face = std::get_if<FaceDesc>(&geometry->shape);
-        IntervalSet landed = face != nullptr ? faceThrough(*face, move.matrix, current)
-                                             : env.impl->rasterizeGeometryThrough(*geometry, move.matrix);
+        IntervalSet landed = face != nullptr ? faceThrough(*face, move, current)
+                                             : geometryThrough(env, *geometry, move);
         if (const GeometryData* erase = env.impl->findGeometry(region->erase)) {
-            landed = geom::subtractSets(landed, env.impl->rasterizeGeometryThrough(*erase, move.matrix));
+            landed = geom::subtractSets(landed, geometryThrough(env, *erase, move));
         }
         return landed;
     }
-    if (geom::keepsPixelGrid(move.matrix)) {
+    if (move.affine() && geom::keepsPixelGrid(move.matrix)) {
         return geom::mapAcrossGrid(region->coverage, move.matrix);
     }
     auto allocated = allocateRaster(env.profile.outputWidth, env.profile.outputHeight);
@@ -1070,8 +1171,9 @@ IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& mo
             setRasterPixel(mask, x, interval.y, Color::white());
         }
     }
-    const RasterBuffer moved = transformRaster(mask, move.matrix, move.sampling,
-                                               env.profile.coverageThreshold);
+    const RasterBuffer moved = move.affine()
+        ? transformRaster(mask, move.matrix, move.sampling, env.profile.coverageThreshold)
+        : displaceRaster(mask, move.map());
     return geom::maskToIntervals(moved, 0.5f);
 }
 
@@ -1551,6 +1653,259 @@ uint32_t decodeTag(Color color) {
             static_cast<uint32_t>(color.b);
 }
 
+// A transform's pivot: the one it names, the point it was given, or else the
+// middle of `box`, what it moves -- the middle of the canvas when that is
+// empty.
+Vec2f pivotIn(const CompileEnv& env, PivotId pivot, Vec2f fallback, const Rect2i& box) {
+    if (const PivotData* data = env.impl->findPivot(pivot)) {
+        return data->position;
+    }
+    if (fallback.x != 0.f || fallback.y != 0.f) {
+        return fallback;
+    }
+    if (box.empty()) {
+        return { static_cast<float>(env.profile.outputWidth) * 0.5f,
+                 static_cast<float>(env.profile.outputHeight) * 0.5f };
+    }
+    return { (static_cast<float>(box.min.x) + static_cast<float>(box.max.x)) * 0.5f,
+             (static_cast<float>(box.min.y) + static_cast<float>(box.max.y)) * 0.5f };
+}
+
+// Where a deform sends each point of the plane. `box` is the bounds of what
+// it bends: a bend sweeps down it, a lattice spans it, a path and an envelope
+// are laid along it. False for anything that is not a deform, and for a
+// squash or stretch that is one matrix (see matrixOfTransform). An empty map
+// is a deform with nothing to do: a lattice with no grid, a path with no
+// path, nothing drawn to bend.
+bool deformMapOf(const CompileEnv& env, const Operation& op, const Rect2i& box,
+                 geom::PointMap* out) {
+    const LSContext::Impl* impl = env.impl;
+    // The same field the boundary query API reports, so a soft boundary renders
+    // the falloff it says it has instead of a hard edge.
+    const auto influence = [impl](BoundaryId id, Vec2f point) -> float {
+        if (!id.valid()) {
+            return 1.f;
+        }
+        const BoundaryField* field = impl->boundaryField(id);
+        return field == nullptr ? 1.f : field->influenceAt(point);
+    };
+    // Squash and stretch keep their volume: one axis by the factor, the other
+    // by its reciprocal, each as far as the boundary lets them.
+    const auto volume = [&](PivotId pivotId, Vec2f fallback, float rawFactor, BoundaryId boundary) {
+        const Vec2f pivot = pivotIn(env, pivotId, fallback, box);
+        const float factor = std::max(0.01f, rawFactor);
+        *out = [influence, boundary, pivot, factor](Vec2f p) {
+            const float weight = influence(boundary, p);
+            const float scaleY = 1.f + (factor - 1.f) * weight;
+            const float scaleX = weight > 0.f ? 1.f + (1.f / factor - 1.f) * weight : 1.f;
+            return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
+                           pivot.y + (p.y - pivot.y) * scaleY };
+        };
+        return true;
+    };
+
+    if (const auto* squash = std::get_if<SquashOp>(&op)) {
+        return squash->boundary.valid() &&
+               volume(squash->pivot, squash->pivotFallback, squash->factor, squash->boundary);
+    }
+    if (const auto* stretch = std::get_if<StretchOp>(&op)) {
+        return stretch->boundary.valid() &&
+               volume(stretch->pivot, stretch->pivotFallback, stretch->factor, stretch->boundary);
+    }
+    if (const auto* bend = std::get_if<BendOp>(&op)) {
+        const float span = std::max(1.f, static_cast<float>(box.height()));
+        const float originY = static_cast<float>(box.min.y);
+        const float originX = (static_cast<float>(box.min.x) + static_cast<float>(box.max.x)) * 0.5f;
+        *out = [b = *bend, span, originX, originY](Vec2f p) {
+            const float t = applyFalloff((p.y - originY) / span, b.falloff);
+            const float angle = b.strength * t * kPi / 180.f;
+            const float dx = p.x - originX;
+            const float dy = p.y - originY;
+            const float c = math::cosf(angle);
+            const float s = math::sinf(angle);
+            return Vec2f { originX + c * dx - s * dy + b.angle * t,
+                           originY + s * dx + c * dy };
+        };
+        return true;
+    }
+    if (const auto* warp = std::get_if<WarpOp>(&op)) {
+        *out = [w = *warp](Vec2f p) {
+            Vec2f moved = p;
+            const size_t count = std::min(w.handlePoints.size(), w.displacements.size());
+            for (size_t i = 0; i < count; ++i) {
+                const Vec2f handle = w.handlePoints[i];
+                const float distance = std::sqrt((p.x - handle.x) * (p.x - handle.x) +
+                                                 (p.y - handle.y) * (p.y - handle.y));
+                if (distance > w.radius) {
+                    continue;
+                }
+                const float weight = applyFalloff(1.f - distance / std::max(0.001f, w.radius),
+                                                  w.falloff) * w.strength;
+                moved.x += w.displacements[i].x * weight;
+                moved.y += w.displacements[i].y * weight;
+            }
+            return moved;
+        };
+        return true;
+    }
+    if (const auto* weighted = std::get_if<WeightedDeformOp>(&op)) {
+        *out = [w = *weighted](Vec2f p) {
+            Vec2f moved = p;
+            const size_t count = std::min(w.handles.size(), w.handleTargets.size());
+            for (size_t i = 0; i < count; ++i) {
+                const Vec2f handle = w.handles[i];
+                const float distance = std::sqrt((p.x - handle.x) * (p.x - handle.x) +
+                                                 (p.y - handle.y) * (p.y - handle.y));
+                if (distance > w.radius) {
+                    continue;
+                }
+                const float base = applyFalloff(1.f - distance / std::max(0.001f, w.radius),
+                                                w.falloff);
+                const float weight = base * (i < w.weights.size() ? w.weights[i] : 1.f);
+                moved.x += (w.handleTargets[i].x - handle.x) * weight;
+                moved.y += (w.handleTargets[i].y - handle.y) * weight;
+            }
+            return moved;
+        };
+        return true;
+    }
+    if (const auto* pin = std::get_if<PinDeformOp>(&op)) {
+        *out = [d = *pin](Vec2f p) {
+            Vec2f moved = p;
+            const size_t count = std::min(d.pins.size(), d.pinTargets.size());
+            float totalWeight = 0.f;
+            Vec2f offset { 0.f, 0.f };
+            for (size_t i = 0; i < count; ++i) {
+                const Vec2f anchor = d.pins[i];
+                const float distanceSq = (p.x - anchor.x) * (p.x - anchor.x) +
+                                         (p.y - anchor.y) * (p.y - anchor.y);
+                const float weight = 1.f / (1.f + distanceSq * std::max(0.01f, d.stiffness));
+                offset.x += (d.pinTargets[i].x - anchor.x) * weight;
+                offset.y += (d.pinTargets[i].y - anchor.y) * weight;
+                totalWeight += weight;
+            }
+            if (totalWeight > 0.f) {
+                moved.x += offset.x / totalWeight;
+                moved.y += offset.y / totalWeight;
+            }
+            return moved;
+        };
+        return true;
+    }
+    if (const auto* lattice = std::get_if<LatticeDeformOp>(&op)) {
+        if (box.empty() || lattice->gridW < 2 || lattice->gridH < 2 ||
+            lattice->controlPoints.size() !=
+                static_cast<size_t>(lattice->gridW) * lattice->gridH) {
+            *out = {};
+            return true;
+        }
+        const float width = static_cast<float>(box.width());
+        const float height = static_cast<float>(box.height());
+        *out = [l = *lattice, box, width, height](Vec2f p) {
+            const float u = clamp01((p.x - static_cast<float>(box.min.x)) / width) *
+                            static_cast<float>(l.gridW - 1);
+            const float v = clamp01((p.y - static_cast<float>(box.min.y)) / height) *
+                            static_cast<float>(l.gridH - 1);
+            const uint32_t x0 = std::min(static_cast<uint32_t>(u), l.gridW - 2);
+            const uint32_t y0 = std::min(static_cast<uint32_t>(v), l.gridH - 2);
+            const float fx = u - static_cast<float>(x0);
+            const float fy = v - static_cast<float>(y0);
+
+            auto controlPoint = [&l](uint32_t gx, uint32_t gy) {
+                return l.controlPoints[static_cast<size_t>(gy) * l.gridW + gx];
+            };
+            const Vec2f p00 = controlPoint(x0, y0);
+            const Vec2f p10 = controlPoint(x0 + 1, y0);
+            const Vec2f p01 = controlPoint(x0, y0 + 1);
+            const Vec2f p11 = controlPoint(x0 + 1, y0 + 1);
+
+            return Vec2f {
+                (p00.x * (1 - fx) + p10.x * fx) * (1 - fy) + (p01.x * (1 - fx) + p11.x * fx) * fy,
+                (p00.y * (1 - fx) + p10.y * fx) * (1 - fy) + (p01.y * (1 - fx) + p11.y * fx) * fy
+            };
+        };
+        return true;
+    }
+    if (const auto* path = std::get_if<PathDeformOp>(&op)) {
+        const GeometryData* geometry = impl->findGeometry(path->path);
+        const std::vector<Vec2f> points = geometry == nullptr ? std::vector<Vec2f>{}
+                                                              : impl->geometryPath(*geometry);
+        if (points.size() < 2 || box.empty()) {
+            *out = {};
+            return true;
+        }
+        const float width = std::max(1.f, static_cast<float>(box.width()));
+        const float left = static_cast<float>(box.min.x);
+        const float centerY = (static_cast<float>(box.min.y) + static_cast<float>(box.max.y)) * 0.5f;
+        const float offset = path->offset;
+        const bool followTangent = path->followTangent;
+        *out = [points, width, left, centerY, offset, followTangent](Vec2f p) {
+            const float t = clamp01((p.x - left) / width);
+            const float position = t * static_cast<float>(points.size() - 1);
+            const size_t index = std::min(static_cast<size_t>(position), points.size() - 2);
+            const float local = position - static_cast<float>(index);
+            const Vec2f a = points[index];
+            const Vec2f b = points[index + 1];
+            const Vec2f onPath { a.x + (b.x - a.x) * local, a.y + (b.y - a.y) * local };
+
+            const float offsetY = p.y - centerY + offset;
+            if (!followTangent) {
+                return Vec2f { onPath.x, onPath.y + offsetY };
+            }
+            const float dx = b.x - a.x;
+            const float dy = b.y - a.y;
+            const float length = std::max(0.001f, std::sqrt(dx * dx + dy * dy));
+            return Vec2f { onPath.x - dy / length * offsetY, onPath.y + dx / length * offsetY };
+        };
+        return true;
+    }
+    if (const auto* envelope = std::get_if<EnvelopeDeformOp>(&op)) {
+        const GeometryData* geometry = impl->findGeometry(envelope->envelopeCurve);
+        const std::vector<Vec2f> points = geometry == nullptr ? std::vector<Vec2f>{}
+                                                              : impl->geometryPath(*geometry);
+        if (points.size() < 2 || box.empty()) {
+            *out = {};
+            return true;
+        }
+        const float width = std::max(1.f, static_cast<float>(box.width()));
+        const float left = static_cast<float>(box.min.x);
+        const float top = static_cast<float>(box.min.y);
+        const float height = std::max(1.f, static_cast<float>(box.height()));
+        *out = [points, width, left, top, height, e = *envelope](Vec2f p) {
+            const float t = clamp01((p.x - left) / width);
+            const float position = t * static_cast<float>(points.size() - 1);
+            const size_t index = std::min(static_cast<size_t>(position), points.size() - 2);
+            const float local = position - static_cast<float>(index);
+            const float targetY = points[index].y + (points[index + 1].y - points[index].y) * local;
+            const float depth = applyFalloff((p.y - top) / height, e.falloff);
+            return Vec2f { p.x, p.y + (targetY - top) * depth * e.strength };
+        };
+        return true;
+    }
+    if (const auto* boundaryDeform = std::get_if<BoundaryDeformOp>(&op)) {
+        const GeometryData* target = impl->findGeometry(boundaryDeform->targetShape);
+        const Rect2i to = target == nullptr ? Rect2i{} : geom::bounds(impl->rasterizeGeometry(*target));
+        if (box.empty() || to.empty()) {
+            *out = {};
+            return true;
+        }
+        const Rect2i from = box;
+        const float scaleX = static_cast<float>(to.width()) / static_cast<float>(from.width());
+        const float scaleY = static_cast<float>(to.height()) / static_cast<float>(from.height());
+        const float strength = clamp01(boundaryDeform->strength);
+        *out = [from, to, scaleX, scaleY, strength](Vec2f p) {
+            const float u = (p.x - static_cast<float>(from.min.x));
+            const float v = (p.y - static_cast<float>(from.min.y));
+            const Vec2f mapped { static_cast<float>(to.min.x) + u * scaleX,
+                                 static_cast<float>(to.min.y) + v * scaleY };
+            return Vec2f { p.x + (mapped.x - p.x) * strength,
+                           p.y + (mapped.y - p.y) * strength };
+        };
+        return true;
+    }
+    return false;
+}
+
 // `trackedPoints`, when given, are moved exactly the way this operation moves
 // the content: through its matrix for an affine transform, through its
 // displacement field for a deform. Anchored pattern origins ride along in it.
@@ -1671,16 +2026,6 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
 
     // --- deforms: displacement fields -------------------------------------
 
-    // The same field the boundary query API reports, so a soft boundary renders
-    // the falloff it says it has instead of a hard edge.
-    auto boundaryInfluence = [&](BoundaryId id, Vec2f point) -> float {
-        if (!id.valid()) {
-            return 1.f;
-        }
-        const BoundaryField* field = env.impl->boundaryField(id);
-        return field == nullptr ? 1.f : field->influenceAt(point);
-    };
-
     // Squash and stretch preserve volume: one axis scales by the factor, the
     // other by its reciprocal. With no boundary limiting them they are a plain
     // affine transform, so they take the matrix path, which resolves coverage
@@ -1691,230 +2036,23 @@ RasterBuffer applyTransformOperation(const CompileEnv& env, const Operation& op,
     };
 
     if (const auto* squash = std::get_if<SquashOp>(&op)) {
-        const Vec2f pivot = pivotOf(squash->pivot, squash->pivotFallback);
-        const float factor = std::max(0.01f, squash->factor);
         if (!squash->boundary.valid()) {
-            const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(volumeScale(factor)), pivot);
+            const Vec2f pivot = pivotOf(squash->pivot, squash->pivotFallback);
+            const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(volumeScale(squash->factor)), pivot);
             return runMatrix(matrix, squash->targetRegion, SamplingPolicy::Coverage);
         }
-        return displaceRaster(source, [&](Vec2f p) {
-            const float influence = boundaryInfluence(squash->boundary, p);
-            const float scaleY = 1.f + (factor - 1.f) * influence;
-            const float scaleX = influence > 0.f ? 1.f + (1.f / factor - 1.f) * influence : 1.f;
-            return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
-                           pivot.y + (p.y - pivot.y) * scaleY };
-        }, trackedPoints);
     }
     if (const auto* stretch = std::get_if<StretchOp>(&op)) {
-        const Vec2f pivot = pivotOf(stretch->pivot, stretch->pivotFallback);
-        const float factor = std::max(0.01f, stretch->factor);
         if (!stretch->boundary.valid()) {
-            const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(volumeScale(factor)), pivot);
+            const Vec2f pivot = pivotOf(stretch->pivot, stretch->pivotFallback);
+            const Mat3f matrix = Mat3f::aroundPivot(Mat3f::scaling(volumeScale(stretch->factor)), pivot);
             return runMatrix(matrix, stretch->targetRegion, SamplingPolicy::Coverage);
         }
-        return displaceRaster(source, [&](Vec2f p) {
-            const float influence = boundaryInfluence(stretch->boundary, p);
-            const float scaleY = 1.f + (factor - 1.f) * influence;
-            const float scaleX = influence > 0.f ? 1.f + (1.f / factor - 1.f) * influence : 1.f;
-            return Vec2f { pivot.x + (p.x - pivot.x) * scaleX,
-                           pivot.y + (p.y - pivot.y) * scaleY };
-        }, trackedPoints);
     }
-    if (const auto* bend = std::get_if<BendOp>(&op)) {
-        const Rect2i box = rasterBounds(source);
-        const float span = std::max(1.f, static_cast<float>(box.height()));
-        const float originY = static_cast<float>(box.min.y);
-        const float originX = (static_cast<float>(box.min.x) + static_cast<float>(box.max.x)) * 0.5f;
-        return displaceRaster(source, [&](Vec2f p) {
-            const float t = applyFalloff((p.y - originY) / span, bend->falloff);
-            const float angle = bend->strength * t * kPi / 180.f;
-            const float dx = p.x - originX;
-            const float dy = p.y - originY;
-            const float c = math::cosf(angle);
-            const float s = math::sinf(angle);
-            return Vec2f { originX + c * dx - s * dy + bend->angle * t,
-                           originY + s * dx + c * dy };
-        }, trackedPoints);
+    geom::PointMap displace;
+    if (deformMapOf(env, op, rasterBounds(source), &displace)) {
+        return displace ? displaceRaster(source, displace, trackedPoints) : source;
     }
-    if (const auto* warp = std::get_if<WarpOp>(&op)) {
-        return displaceRaster(source, [&](Vec2f p) {
-            Vec2f moved = p;
-            const size_t count = std::min(warp->handlePoints.size(), warp->displacements.size());
-            for (size_t i = 0; i < count; ++i) {
-                const Vec2f handle = warp->handlePoints[i];
-                const float distance = std::sqrt((p.x - handle.x) * (p.x - handle.x) +
-                                                 (p.y - handle.y) * (p.y - handle.y));
-                if (distance > warp->radius) {
-                    continue;
-                }
-                const float weight = applyFalloff(1.f - distance / std::max(0.001f, warp->radius),
-                                                  warp->falloff) * warp->strength;
-                moved.x += warp->displacements[i].x * weight;
-                moved.y += warp->displacements[i].y * weight;
-            }
-            return moved;
-        }, trackedPoints);
-    }
-    if (const auto* weighted = std::get_if<WeightedDeformOp>(&op)) {
-        return displaceRaster(source, [&](Vec2f p) {
-            Vec2f moved = p;
-            const size_t count = std::min(weighted->handles.size(), weighted->handleTargets.size());
-            for (size_t i = 0; i < count; ++i) {
-                const Vec2f handle = weighted->handles[i];
-                const float distance = std::sqrt((p.x - handle.x) * (p.x - handle.x) +
-                                                 (p.y - handle.y) * (p.y - handle.y));
-                if (distance > weighted->radius) {
-                    continue;
-                }
-                const float base = applyFalloff(1.f - distance / std::max(0.001f, weighted->radius),
-                                                weighted->falloff);
-                const float weight = base * (i < weighted->weights.size() ? weighted->weights[i] : 1.f);
-                moved.x += (weighted->handleTargets[i].x - handle.x) * weight;
-                moved.y += (weighted->handleTargets[i].y - handle.y) * weight;
-            }
-            return moved;
-        }, trackedPoints);
-    }
-    if (const auto* pin = std::get_if<PinDeformOp>(&op)) {
-        return displaceRaster(source, [&](Vec2f p) {
-            Vec2f moved = p;
-            const size_t count = std::min(pin->pins.size(), pin->pinTargets.size());
-            float totalWeight = 0.f;
-            Vec2f offset { 0.f, 0.f };
-            for (size_t i = 0; i < count; ++i) {
-                const Vec2f anchor = pin->pins[i];
-                const float distanceSq = (p.x - anchor.x) * (p.x - anchor.x) +
-                                         (p.y - anchor.y) * (p.y - anchor.y);
-                const float weight = 1.f / (1.f + distanceSq * std::max(0.01f, pin->stiffness));
-                offset.x += (pin->pinTargets[i].x - anchor.x) * weight;
-                offset.y += (pin->pinTargets[i].y - anchor.y) * weight;
-                totalWeight += weight;
-            }
-            if (totalWeight > 0.f) {
-                moved.x += offset.x / totalWeight;
-                moved.y += offset.y / totalWeight;
-            }
-            return moved;
-        }, trackedPoints);
-    }
-    if (const auto* lattice = std::get_if<LatticeDeformOp>(&op)) {
-        const Rect2i box = rasterBounds(source);
-        if (box.empty() || lattice->gridW < 2 || lattice->gridH < 2 ||
-            lattice->controlPoints.size() !=
-                static_cast<size_t>(lattice->gridW) * lattice->gridH) {
-            return source;
-        }
-        const float width = static_cast<float>(box.width());
-        const float height = static_cast<float>(box.height());
-        return displaceRaster(source, [&](Vec2f p) {
-            const float u = clamp01((p.x - static_cast<float>(box.min.x)) / width) *
-                            static_cast<float>(lattice->gridW - 1);
-            const float v = clamp01((p.y - static_cast<float>(box.min.y)) / height) *
-                            static_cast<float>(lattice->gridH - 1);
-            const uint32_t x0 = std::min(static_cast<uint32_t>(u), lattice->gridW - 2);
-            const uint32_t y0 = std::min(static_cast<uint32_t>(v), lattice->gridH - 2);
-            const float fx = u - static_cast<float>(x0);
-            const float fy = v - static_cast<float>(y0);
-
-            auto controlPoint = [&](uint32_t gx, uint32_t gy) {
-                return lattice->controlPoints[static_cast<size_t>(gy) * lattice->gridW + gx];
-            };
-            const Vec2f p00 = controlPoint(x0, y0);
-            const Vec2f p10 = controlPoint(x0 + 1, y0);
-            const Vec2f p01 = controlPoint(x0, y0 + 1);
-            const Vec2f p11 = controlPoint(x0 + 1, y0 + 1);
-
-            return Vec2f {
-                (p00.x * (1 - fx) + p10.x * fx) * (1 - fy) + (p01.x * (1 - fx) + p11.x * fx) * fy,
-                (p00.y * (1 - fx) + p10.y * fx) * (1 - fy) + (p01.y * (1 - fx) + p11.y * fx) * fy
-            };
-        }, trackedPoints);
-    }
-    if (const auto* path = std::get_if<PathDeformOp>(&op)) {
-        const GeometryData* geometry = env.impl->findGeometry(path->path);
-        if (geometry == nullptr) {
-            return source;
-        }
-        const std::vector<Vec2f> points = env.impl->geometryPath(*geometry);
-        if (points.size() < 2) {
-            return source;
-        }
-        const Rect2i box = rasterBounds(source);
-        if (box.empty()) {
-            return source;
-        }
-        const float width = std::max(1.f, static_cast<float>(box.width()));
-        const float centerY = (static_cast<float>(box.min.y) + static_cast<float>(box.max.y)) * 0.5f;
-
-        return displaceRaster(source, [&](Vec2f p) {
-            const float t = clamp01((p.x - static_cast<float>(box.min.x)) / width);
-            const float position = t * static_cast<float>(points.size() - 1);
-            const size_t index = std::min(static_cast<size_t>(position), points.size() - 2);
-            const float local = position - static_cast<float>(index);
-            const Vec2f a = points[index];
-            const Vec2f b = points[index + 1];
-            const Vec2f onPath { a.x + (b.x - a.x) * local, a.y + (b.y - a.y) * local };
-
-            float offsetY = p.y - centerY + path->offset;
-            if (!path->followTangent) {
-                return Vec2f { onPath.x, onPath.y + offsetY };
-            }
-            const float dx = b.x - a.x;
-            const float dy = b.y - a.y;
-            const float length = std::max(0.001f, std::sqrt(dx * dx + dy * dy));
-            return Vec2f { onPath.x - dy / length * offsetY, onPath.y + dx / length * offsetY };
-        }, trackedPoints);
-    }
-    if (const auto* envelope = std::get_if<EnvelopeDeformOp>(&op)) {
-        const GeometryData* geometry = env.impl->findGeometry(envelope->envelopeCurve);
-        if (geometry == nullptr) {
-            return source;
-        }
-        const std::vector<Vec2f> points = env.impl->geometryPath(*geometry);
-        if (points.size() < 2) {
-            return source;
-        }
-        const Rect2i box = rasterBounds(source);
-        if (box.empty()) {
-            return source;
-        }
-        const float width = std::max(1.f, static_cast<float>(box.width()));
-        const float top = static_cast<float>(box.min.y);
-        const float height = std::max(1.f, static_cast<float>(box.height()));
-
-        return displaceRaster(source, [&](Vec2f p) {
-            const float t = clamp01((p.x - static_cast<float>(box.min.x)) / width);
-            const float position = t * static_cast<float>(points.size() - 1);
-            const size_t index = std::min(static_cast<size_t>(position), points.size() - 2);
-            const float local = position - static_cast<float>(index);
-            const float targetY = points[index].y + (points[index + 1].y - points[index].y) * local;
-            const float depth = applyFalloff((p.y - top) / height, envelope->falloff);
-            return Vec2f { p.x, p.y + (targetY - top) * depth * envelope->strength };
-        }, trackedPoints);
-    }
-    if (const auto* boundaryDeform = std::get_if<BoundaryDeformOp>(&op)) {
-        const GeometryData* target = env.impl->findGeometry(boundaryDeform->targetShape);
-        if (target == nullptr) {
-            return source;
-        }
-        const Rect2i from = rasterBounds(source);
-        const Rect2i to = geom::bounds(env.impl->rasterizeGeometry(*target));
-        if (from.empty() || to.empty()) {
-            return source;
-        }
-        const float scaleX = static_cast<float>(to.width()) / static_cast<float>(from.width());
-        const float scaleY = static_cast<float>(to.height()) / static_cast<float>(from.height());
-        return displaceRaster(source, [&](Vec2f p) {
-            const float u = (p.x - static_cast<float>(from.min.x));
-            const float v = (p.y - static_cast<float>(from.min.y));
-            const Vec2f mapped { static_cast<float>(to.min.x) + u * scaleX,
-                                 static_cast<float>(to.min.y) + v * scaleY };
-            const float strength = clamp01(boundaryDeform->strength);
-            return Vec2f { p.x + (mapped.x - p.x) * strength,
-                           p.y + (mapped.y - p.y) * strength };
-        }, trackedPoints);
-    }
-
     return source;
 }
 
@@ -1930,19 +2068,32 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
     auto placed = [&](RegionId region, const IntervalSet& drawn) {
         return env.move == nullptr ? drawn : regionThrough(env, region, *env.move, &current);
     };
-    auto placedPoints = [&](std::vector<Vec2f> points) {
+    auto placedPoints = [&](std::vector<Vec2f> points, bool closed) {
         if (env.move != nullptr) {
+            // Bent, a straight edge bends too: cut into half-pixel steps first.
+            if (!env.move->affine()) {
+                points = geom::densifyPath(points, closed);
+            }
             for (Vec2f& p : points) {
-                p = env.move->matrix.transformPoint(p);
+                p = env.move->apply(p);
             }
         }
         return points;
     };
-    // How much a move stretches a width: the square root of the area it
-    // scales by, so a turn keeps a line as wide as it was.
-    const float placedScale = env.move == nullptr
-        ? 1.f
-        : std::sqrt(std::fabs(env.move->matrix.determinant()));
+    // How much a move stretches a width (see MarkMove::stretchAt), taken at
+    // the middle of the path drawn.
+    auto placedScale = [&](const std::vector<Vec2f>& points) {
+        if (env.move == nullptr || points.empty()) {
+            return 1.f;
+        }
+        Vec2f middle { 0.f, 0.f };
+        for (const Vec2f& p : points) {
+            middle.x += p.x;
+            middle.y += p.y;
+        }
+        const float count = static_cast<float>(points.size());
+        return env.move->stretchAt({ middle.x / count, middle.y / count });
+    };
 
     if (const auto* fill = std::get_if<FillSolidOp>(&op)) {
         const IntervalSet* coverage = coverageOf(fill->targetRegion);
@@ -2162,7 +2313,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             closed = polyline->closed;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = strokePath(placedPoints(points), closed, stroke->width * placedScale,
+        out.coverage = strokePath(placedPoints(points, closed), closed,
+                                  stroke->width * placedScale(points),
                                   stroke->cap, stroke->join, stroke->miterLimit, stroke->taper,
                                   stroke->snap);
 
@@ -2201,7 +2353,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             closed = curve->closed;
         }
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        out.coverage = strokePath(placedPoints(points), closed, stroke->width * placedScale,
+        out.coverage = strokePath(placedPoints(points, closed), closed,
+                                  stroke->width * placedScale(points),
                                   stroke->cap, stroke->join, stroke->miterLimit, stroke->taper,
                                   SnapPolicy::None);
         out.color = [color](int32_t, int32_t) { return color; };
@@ -2217,7 +2370,7 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
         out.coverage = env.move == nullptr
             ? env.impl->rasterizeGeometry(*geometry)
-            : env.impl->rasterizeGeometryThrough(*geometry, env.move->matrix);
+            : geometryThrough(env, *geometry, *env.move);
         out.color = [color](int32_t, int32_t) { return color; };
         out.blend = stroke->blend;
         out.opacity = stroke->opacity;
@@ -2245,9 +2398,9 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
             const GeometryData* erase = env.impl->findGeometry(region->erase);
             const GeometryData* source = env.impl->findGeometry(region->source);
             const IntervalSet whole = source == nullptr
-                ? landed : env.impl->rasterizeGeometryThrough(*source, env.move->matrix);
+                ? landed : geometryThrough(env, *source, *env.move);
             base = geom::subtractSets(geom::boundaryOf(whole),
-                                      env.impl->rasterizeGeometryThrough(*erase, env.move->matrix));
+                                      geometryThrough(env, *erase, *env.move));
         } else {
             base = geom::boundaryOf(landed);
         }
@@ -2264,9 +2417,11 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         if (geometry == nullptr) {
             return false;
         }
-        const std::vector<Vec2f> points = placedPoints(env.impl->geometryPath(*geometry));
+        const std::vector<Vec2f> drawn = env.impl->geometryPath(*geometry);
+        const std::vector<Vec2f> points = placedPoints(drawn, false);
         const Color color = env.role(stroke->paletteRole, stroke->fallbackColor);
-        const float brushSize = stroke->size * placedScale;
+        const float brushScale = placedScale(drawn);
+        const float brushSize = stroke->size * brushScale;
         const float spacing = std::max(0.05f, stroke->spacing) * std::max(1.f, brushSize);
 
         IntervalSet coverage;
@@ -2286,8 +2441,8 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
                                                       stroke->scatterSeed);
                     const float offsetX = (static_cast<float>(noise % 1000u) / 1000.f - 0.5f) * 2.f;
                     const float offsetY = (static_cast<float>((noise / 1000u) % 1000u) / 1000.f - 0.5f) * 2.f;
-                    center.x += offsetX * stroke->scatter * placedScale;
-                    center.y += offsetY * stroke->scatter * placedScale;
+                    center.x += offsetX * stroke->scatter * brushScale;
+                    center.y += offsetY * stroke->scatter * brushScale;
                 }
                 const float radius = std::max(0.5f, brushSize * 0.5f);
                 if (const PatternData* brush = env.impl->findPattern(stroke->brushPattern)) {
@@ -2528,22 +2683,39 @@ bool drawnFromShapes(const LSContext::Impl& impl, const Operation& op) {
 }
 
 // The matrix a transform applies -- built exactly as the raster path builds
-// it -- and the sampling it asks for. False for anything that is not one
-// matrix, or that needs the drawing itself to know its pivot.
-bool matrixOfTransform(const CompileEnv& env, const Operation& op, Mat3f* out,
-                       SamplingPolicy* sampling) {
+// it -- and the sampling it asks for. `box` is the bounds of what it moves,
+// for a pivot left to the middle of the drawing; without it, such a transform
+// is not one matrix yet. False for anything that is not one matrix.
+bool matrixOfTransform(const CompileEnv& env, const Operation& op, const Rect2i* box,
+                       Mat3f* out, SamplingPolicy* sampling) {
     const auto pivotOf = [&](PivotId pivot, Vec2f fallback, Vec2f* at) {
-        if (const PivotData* data = env.impl->findPivot(pivot)) {
-            *at = data->position;
-            return true;
+        if (env.impl->findPivot(pivot) == nullptr && fallback.x == 0.f && fallback.y == 0.f &&
+            box == nullptr) {
+            return false;   // the middle of what is drawn, not measured yet
         }
-        if (fallback.x != 0.f || fallback.y != 0.f) {
-            *at = fallback;
-            return true;
-        }
-        return false;   // the middle of what is drawn: only a picture knows that
+        *at = pivotIn(env, pivot, fallback, box == nullptr ? Rect2i{} : *box);
+        return true;
     };
     Vec2f pivot;
+    // Squash and stretch with no boundary to limit them: one scale that keeps
+    // the volume.
+    const auto volume = [&](const auto& squash) {
+        if (squash.boundary.valid() || squash.targetRegion.valid() ||
+            !pivotOf(squash.pivot, squash.pivotFallback, &pivot)) {
+            return false;
+        }
+        const float factor = std::max(0.01f, squash.factor);
+        *out = applyRounding(Mat3f::aroundPivot(Mat3f::scaling({ 1.f / factor, factor }), pivot),
+                             RoundingPolicy::SubpixelHalf);
+        *sampling = SamplingPolicy::Coverage;
+        return true;
+    };
+    if (const auto* squash = std::get_if<SquashOp>(&op)) {
+        return volume(*squash);
+    }
+    if (const auto* stretch = std::get_if<StretchOp>(&op)) {
+        return volume(*stretch);
+    }
     if (const auto* translate = std::get_if<TranslateOp>(&op)) {
         if (translate->targetRegion.valid()) {
             return false;
@@ -2614,59 +2786,179 @@ bool matrixOfTransform(const CompileEnv& env, const Operation& op, Mat3f* out,
     return false;
 }
 
-// How each operation of a layer moves, geometry first. False when the layer
-// has no transform to resolve or cannot be compiled this way.
+// One transform as a step of the way (see MoveStage): its matrix, or its
+// deform's map. `box` is the bounds of what it moves, for one that measures
+// that; null asks whether it can do without. False when it cannot be
+// followed as geometry.
+bool stageOf(const CompileEnv& env, const Operation& op, const Rect2i* box,
+             MoveStage* stage, SamplingPolicy* sampling) {
+    Mat3f matrix;
+    if (matrixOfTransform(env, op, box, &matrix, sampling)) {
+        auto inverse = matrix.inverse();
+        if (inverse.fail()) {
+            return false;                       // a scale of zero: the old path collapses it
+        }
+        stage->matrix = matrix;
+        stage->inverse = inverse.value;
+        stage->map = {};
+        return true;
+    }
+    if (box == nullptr) {
+        return false;
+    }
+    *sampling = SamplingPolicy::Center;
+    stage->matrix = Mat3f{};
+    stage->inverse = Mat3f{};
+    return deformMapOf(env, op, *box, &stage->map);
+}
+
+// How each operation of a layer moves, geometry first: every transform after
+// a mark, composed -- one matrix, or, with a deform among them, each step in
+// turn. `outer` is one more move after them all: where the sprite is put.
+// False when nothing moves, or the layer cannot be compiled this way.
 bool planGeometric(const CompileEnv& env, const LSContext::Impl& impl, const LayerData& layer,
-                   std::vector<MarkMove>* moves) {
+                   const Mat3f* outer, std::vector<MarkMove>* moves) {
     const std::vector<OperationId>& operations = layer.operations;
-    int64_t last = -1;
-    for (size_t i = 0; i < operations.size(); ++i) {
-        const OperationData* data = impl.findOperation(operations[i]);
-        if (data != nullptr && operationIsTransform(data->op)) {
-            last = static_cast<int64_t>(i);
+    const size_t count = operations.size();
+    std::vector<const OperationData*> ops(count, nullptr);
+    int64_t last = outer != nullptr ? static_cast<int64_t>(count) : -1;
+    for (size_t i = 0; i < count; ++i) {
+        ops[i] = impl.findOperation(operations[i]);
+        if (ops[i] != nullptr && operationIsTransform(ops[i]->op)) {
+            last = std::max(last, static_cast<int64_t>(i));
         }
     }
     if (last < 0) {
         return false;
     }
-    moves->assign(operations.size(), MarkMove{});
-    Mat3f after;                       // everything after the operation, composed
-    SamplingPolicy sampling = SamplingPolicy::Center;
-    for (size_t n = operations.size(); n-- > 0;) {
-        const OperationData* data = impl.findOperation(operations[n]);
-        if (data == nullptr) {
+
+    // Everything before the last move must be a mark drawn from shapes, and
+    // every move one that can be followed.
+    const Rect2i someBox { { 0, 0 }, { 1, 1 } };
+    for (size_t i = 0; i < count; ++i) {
+        if (ops[i] == nullptr) {
             continue;
         }
-        if (operationIsTransform(data->op)) {
-            Mat3f matrix;
+        if (operationIsTransform(ops[i]->op)) {
+            MoveStage stage;
             SamplingPolicy asked = SamplingPolicy::Center;
-            if (!matrixOfTransform(env, data->op, &matrix, &asked)) {
+            if (!stageOf(env, ops[i]->op, &someBox, &stage, &asked)) {
                 return false;
             }
-            after = after.mul(matrix);          // this one happens first
-            if (asked == SamplingPolicy::RotSprite || sampling == SamplingPolicy::Center) {
-                sampling = asked;
-            }
-            continue;
-        }
-        if (static_cast<int64_t>(n) > last) {
-            continue;                           // after every transform: drawn in place
-        }
-        if (!isGeometryMark(data->op) || !drawnFromShapes(impl, data->op)) {
+        } else if (static_cast<int64_t>(i) < last &&
+                   (!isGeometryMark(ops[i]->op) || !drawnFromShapes(impl, ops[i]->op))) {
             return false;
         }
-        if (isIdentityTransform(after)) {
+    }
+
+    struct Step {
+        size_t index = 0;
+        MoveStage stage;
+        SamplingPolicy sampling = SamplingPolicy::Center;
+    };
+    std::vector<Step> steps;
+
+    // The way from just after operation `from` to just before `until`: every
+    // step between, in turn, with each run of matrices made one.
+    const auto moveBetween = [&steps](size_t from, size_t until) {
+        MarkMove move;
+        std::vector<MoveStage> stages;
+        for (const Step& step : steps) {
+            if (step.index <= from || step.index >= until) {
+                continue;
+            }
+            if (!step.stage.map && !stages.empty() && !stages.back().map) {
+                MoveStage& before = stages.back();
+                before.matrix = step.stage.matrix.mul(before.matrix);
+                before.inverse = before.inverse.mul(step.stage.inverse);
+            } else {
+                stages.push_back(step.stage);
+            }
+        }
+        for (auto step = steps.rbegin(); step != steps.rend(); ++step) {
+            if (step->index > from && step->index < until &&
+                (step->sampling == SamplingPolicy::RotSprite || move.sampling == SamplingPolicy::Center)) {
+                move.sampling = step->sampling;
+            }
+        }
+        if (stages.size() == 1 && !stages.front().map) {
+            move.matrix = stages.front().matrix;
+            move.inverse = stages.front().inverse;
+            move.moves = !isIdentityTransform(move.matrix);
+        } else if (!stages.empty()) {
+            move.stages = std::move(stages);
+            move.moves = true;
+        }
+        return move;
+    };
+
+    // What the layer has drawn by the time the operation at `until` runs,
+    // where the moves before it put it, within the canvas: the bounds a
+    // transform measures, as the picture it would otherwise move shows them.
+    const auto drawnBefore = [&](size_t until) {
+        IntervalSet drawn;
+        const RasterBuffer nothing;
+        for (size_t j = 0; j < until && j < count; ++j) {
+            if (ops[j] == nullptr || operationIsTransform(ops[j]->op)) {
+                continue;
+            }
+            const MarkMove partial = moveBetween(j, until);
+            CompileEnv markEnv = env;
+            markEnv.trace = nullptr;
+            markEnv.move = partial.moves ? &partial : nullptr;
+            if (const auto* clear = std::get_if<ClearRegionOp>(&ops[j]->op)) {
+                if (const IntervalSet* region = regionCoverage(env, clear->targetRegion)) {
+                    drawn = geom::subtractSets(drawn, partial.moves
+                        ? regionThrough(markEnv, clear->targetRegion, partial, nullptr) : *region);
+                }
+                continue;
+            }
+            Mark mark;
+            if (resolveMarkOperation(markEnv, ops[j]->op, nothing, mark)) {
+                drawn = mark.blend == BlendMode::Erase ? geom::subtractSets(drawn, mark.coverage)
+                                                       : geom::unionSets(drawn, mark.coverage);
+            }
+        }
+        const Rect2i box = geom::bounds(drawn);
+        const Rect2i kept { { std::max(box.min.x, 0), std::max(box.min.y, 0) },
+                            { std::min(box.max.x, static_cast<int32_t>(env.profile.outputWidth)),
+                              std::min(box.max.y, static_cast<int32_t>(env.profile.outputHeight)) } };
+        return kept.empty() ? Rect2i{} : kept;
+    };
+
+    for (size_t i = 0; i < count; ++i) {
+        if (ops[i] == nullptr || !operationIsTransform(ops[i]->op)) {
             continue;
         }
-        auto inverse = after.inverse();
-        if (inverse.fail()) {
-            return false;                       // a scale of zero: the old path collapses it
+        Step step;
+        step.index = i;
+        if (!stageOf(env, ops[i]->op, nullptr, &step.stage, &step.sampling)) {
+            const Rect2i box = drawnBefore(i);
+            if (!stageOf(env, ops[i]->op, &box, &step.stage, &step.sampling)) {
+                return false;
+            }
         }
-        MarkMove& move = (*moves)[n];
-        move.matrix = after;
-        move.inverse = inverse.value;
-        move.sampling = sampling;
-        move.moves = true;
+        steps.push_back(std::move(step));
+    }
+    if (outer != nullptr) {
+        auto inverse = outer->inverse();
+        if (inverse.fail()) {
+            return false;
+        }
+        Step step;
+        step.index = count;
+        step.stage.matrix = *outer;
+        step.stage.inverse = inverse.value;
+        step.sampling = env.profile.sampling;
+        steps.push_back(std::move(step));
+    }
+
+    moves->assign(count, MarkMove{});
+    for (size_t n = 0; n < count; ++n) {
+        if (ops[n] != nullptr && !operationIsTransform(ops[n]->op) &&
+            static_cast<int64_t>(n) < last) {
+            (*moves)[n] = moveBetween(n, count + 1);
+        }
     }
     return true;
 }
@@ -2677,26 +2969,27 @@ bool planGeometric(const CompileEnv& env, const LSContext::Impl& impl, const Lay
 //   Global: the lattice stays level with the canvas, while its origin and a
 //          gradient's axis travel with the mark.
 //   Fixed: the canvas's own lattice, wherever the mark went.
-// A fill with no pattern is coloured from the pixel it came from.
+// A fill with no pattern is coloured from the pixel it came from. The move
+// must outlive the colour, as the plan's moves outlive the compile.
 void colourWhereItLands(Mark& mark, const MarkMove& move) {
-    const Mat3f inverse = move.inverse;
+    const MarkMove* way = &move;
     if (mark.evaluateAt) {
         const auto evaluate = mark.evaluateAt;
         PatternFrame frame = mark.frame;
         if (mark.anchor == PatternAnchor::Local) {
-            mark.color = [evaluate, frame, inverse](int32_t x, int32_t y) {
-                const Vec2f from = inverse.transformPoint({ static_cast<float>(x) + 0.5f,
-                                                            static_cast<float>(y) + 0.5f });
+            mark.color = [evaluate, frame, way](int32_t x, int32_t y) {
+                const Vec2f from = way->back({ static_cast<float>(x) + 0.5f,
+                                               static_cast<float>(y) + 0.5f });
                 return evaluate(from.x, from.y, frame);
             };
             return;
         }
         if (mark.anchor == PatternAnchor::Global) {
-            const Vec2f origin = move.matrix.transformPoint(frame.origin);
-            const Vec2f start = move.matrix.transformPoint({ frame.origin.x + frame.start.x,
-                                                             frame.origin.y + frame.start.y });
-            const Vec2f end = move.matrix.transformPoint({ frame.origin.x + frame.end.x,
-                                                           frame.origin.y + frame.end.y });
+            const Vec2f origin = way->apply(frame.origin);
+            const Vec2f start = way->apply({ frame.origin.x + frame.start.x,
+                                             frame.origin.y + frame.start.y });
+            const Vec2f end = way->apply({ frame.origin.x + frame.end.x,
+                                           frame.origin.y + frame.end.y });
             frame = { origin, { start.x - origin.x, start.y - origin.y },
                       { end.x - origin.x, end.y - origin.y } };
         }
@@ -2706,12 +2999,29 @@ void colourWhereItLands(Mark& mark, const MarkMove& move) {
         return;
     }
     const auto colour = mark.color;
-    mark.color = [colour, inverse](int32_t x, int32_t y) {
-        const Vec2f from = inverse.transformPoint({ static_cast<float>(x) + 0.5f,
-                                                    static_cast<float>(y) + 0.5f });
+    mark.color = [colour, way](int32_t x, int32_t y) {
+        const Vec2f from = way->back({ static_cast<float>(x) + 0.5f,
+                                       static_cast<float>(y) + 0.5f });
         return colour(static_cast<int32_t>(std::floor(from.x)),
                       static_cast<int32_t>(std::floor(from.y)));
     };
+}
+
+// What a compile placed by its sprite leaves: the entity is up to date, but
+// what was cached of it unplaced may not be -- it is forgotten, then the
+// entity is clean.
+static void settlePlaced(LSContext::Impl& impl, uint64_t entity, CacheKind kind) {
+    if (impl.graph.dirty.count(entity) == 0) {
+        return;
+    }
+    CacheKey from;
+    from.entity = entity;
+    from.kind = CacheKind::Layer;              // the least key the entity has
+    for (auto it = impl.compileCache.lower_bound(from);
+         it != impl.compileCache.end() && it->first.entity == entity;) {
+        it = it->first.kind == kind ? impl.compileCache.erase(it) : std::next(it);
+    }
+    impl.graph.dirty.erase(entity);
 }
 
 Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& profile) {
@@ -2725,7 +3035,8 @@ static bool tracesTheWholeSprite(const LSContext::Impl& impl, const LayerData& l
 
 Result<CompileResult> LSContext::compileLayerWithin(
         LayerId id, const CompileProfile& profile,
-        const RasterBuffer* spriteSilhouette, bool suppressSpriteOutlines) const {
+        const RasterBuffer* spriteSilhouette, bool suppressSpriteOutlines,
+        const Mat3f* placement) const {
     const LayerData* layer = impl_->findLayer(id);
     if (layer == nullptr) {
         return Result<CompileResult>::err(LSError::InvalidId);
@@ -2739,7 +3050,12 @@ Result<CompileResult> LSContext::compileLayerWithin(
     // draws depends on every other layer, and the cache key knows only about
     // this one -- so a hit would hand back an outline of a figure that has
     // since changed shape somewhere else.
-    const bool cacheable = !tracesTheWholeSprite(*impl_, *layer);
+    // Where the sprite puts the layer (see compileSpriteWithin); null when it
+    // stays where it was drawn. A layer so placed is cached as part of its
+    // sprite rather than by itself.
+    const Mat3f* outer = placement != nullptr && !isIdentityTransform(*placement) ? placement
+                                                                                   : nullptr;
+    const bool cacheable = !tracesTheWholeSprite(*impl_, *layer) && outer == nullptr;
 
     CacheKey key;
     key.entity = id.value;
@@ -2867,7 +3183,7 @@ Result<CompileResult> LSContext::compileLayerWithin(
     // Geometry first, when the layer allows it (see planGeometric).
     std::vector<MarkMove> moves;
     const bool geometric = resolved.resolveTransforms && !env.samplePolicy &&
-                           planGeometric(env, *impl_, *layer, &moves);
+                           planGeometric(env, *impl_, *layer, outer, &moves);
     size_t opIndex = 0;
 
     for (OperationId opId : layer->operations) {
@@ -3297,6 +3613,33 @@ Result<CompileResult> LSContext::compileLayerWithin(
                  std::to_string(geom::pixelCount(mark.coverage)) + " px");
     }
 
+    // Where the sprite puts the layer, when its marks could not go there as
+    // shapes: the layer moved as one picture, like a transform in it, its
+    // travelling patterns with it.
+    if (outer != nullptr && !geometric) {
+        for (DeferredFill& fill : deferred) {
+            if (fill.anchor != PatternAnchor::Global) {
+                continue;
+            }
+            const PatternFrame& frame = fill.frame;
+            const Vec2f origin = outer->transformPoint(frame.origin);
+            const Vec2f start = outer->transformPoint({ frame.origin.x + frame.start.x,
+                                                        frame.origin.y + frame.start.y });
+            const Vec2f end = outer->transformPoint({ frame.origin.x + frame.end.x,
+                                                      frame.origin.y + frame.end.y });
+            fill.frame = { origin, { start.x - origin.x, start.y - origin.y },
+                           { end.x - origin.x, end.y - origin.y } };
+        }
+        syncTagAlpha();
+        result.raster = transformRaster(result.raster, *outer, resolved.sampling,
+                                        resolved.coverageThreshold);
+        if (!deferred.empty() && !tagPlane.empty()) {
+            tagPlane = transformRaster(tagPlane, *outer, resolved.sampling,
+                                       resolved.coverageThreshold);
+        }
+        env.note("moved the layer where its sprite is put, as a picture");
+    }
+
     // Re-resolve anchored patterns now that the content has finished moving.
     // Coverage, alpha and blending were settled at paint time; only the colour
     // is recomputed, in the frame the anchor asked for.
@@ -3327,9 +3670,18 @@ Result<CompileResult> LSContext::compileLayerWithin(
     // Layer mask: only the mask region survives.
     if (layer->mask.valid()) {
         if (const RegionData* mask = impl_->findRegion(layer->mask)) {
+            // A placed layer's mask goes where the layer went.
+            IntervalSet kept = mask->coverage;
+            if (outer != nullptr) {
+                MarkMove placed;
+                placed.matrix = *outer;
+                placed.sampling = resolved.sampling;
+                placed.moves = true;
+                kept = regionThrough(env, layer->mask, placed, nullptr);
+            }
             for (int32_t y = 0; y < static_cast<int32_t>(result.raster.height); ++y) {
                 for (int32_t x = 0; x < static_cast<int32_t>(result.raster.width); ++x) {
-                    if (!geom::contains(mask->coverage, {x, y})) {
+                    if (!geom::contains(kept, {x, y})) {
                         setRasterPixel(result.raster, x, y, Color::transparent());
                     }
                 }
@@ -3342,6 +3694,8 @@ Result<CompileResult> LSContext::compileLayerWithin(
     if (cacheable) {
         impl_->compileCache[key] = result;
         impl_->graph.dirty.erase(id.value);
+    } else if (outer != nullptr && !tracesTheWholeSprite(*impl_, *layer)) {
+        settlePlaced(*impl_, id.value, CacheKind::Layer);
     }
     return Result<CompileResult>::ok(result);
 }
@@ -3369,6 +3723,11 @@ static bool tracesTheWholeSprite(const LSContext::Impl& impl, const LayerData& l
 }
 
 Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile& profile) {
+    return compileSpriteWithin(id, profile, nullptr);
+}
+
+Result<CompileResult> LSContext::compileSpriteWithin(SpriteId id, const CompileProfile& profile,
+                                                     const Mat3f* placement) {
     const SpriteData* sprite = impl_->findSprite(id);
     if (sprite == nullptr) {
         return Result<CompileResult>::err(LSError::InvalidId);
@@ -3380,18 +3739,29 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
 
     const CompileProfile resolved = impl_->resolveProfileDefaults(profile, sprite->document);
 
+    // Where every layer lands: the sprite's own transform, then wherever an
+    // assembly put it. Each layer moves its marks there as shapes, so a turned
+    // sprite is drawn turned rather than drawn and then turned as a picture.
+    const Mat3f whole = placement != nullptr ? placement->mul(sprite->transform)
+                                             : sprite->transform;
+    const Mat3f* outer = isIdentityTransform(whole) ? nullptr : &whole;
+    // Placed by an assembly, it is cached as part of the assembly.
+    const bool cacheable = placement == nullptr;
+
     CacheKey key;
     key.entity = id.value;
     key.profileHash = impl_->hashProfile(resolved);
     key.resourceRevision = impl_->resourceRevision;
     key.engineVersion = LS_ENGINE_VERSION;
     key.kind = CacheKind::Sprite;
-    auto cached = impl_->compileCache.find(key);
-    if (cached != impl_->compileCache.end() && impl_->graph.dirty.count(id.value) == 0) {
-        ++impl_->cacheHits;
-        return Result<CompileResult>::ok(cached->second);
+    if (cacheable) {
+        auto cached = impl_->compileCache.find(key);
+        if (cached != impl_->compileCache.end() && impl_->graph.dirty.count(id.value) == 0) {
+            ++impl_->cacheHits;
+            return Result<CompileResult>::ok(cached->second);
+        }
+        ++impl_->cacheMisses;
     }
-    ++impl_->cacheMisses;
 
     auto allocated = allocateRaster(resolved.outputWidth, resolved.outputHeight);
     if (allocated.fail()) {
@@ -3516,7 +3886,7 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
 
     for (LayerId layerId : order.value) {
         auto compiled = compileLayerWithin(layerId, resolved,
-                                           wantsSilhouette ? &silhouette : nullptr, false);
+                                           wantsSilhouette ? &silhouette : nullptr, false, outer);
         if (compiled.fail()) {
             return Result<CompileResult>::err(compiled.error);
         }
@@ -3545,7 +3915,7 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         bool hasClip = false;
         if (layer->clipBase.valid()) {
             auto base = compileLayerWithin(layer->clipBase, resolved,
-                                           wantsSilhouette ? &silhouette : nullptr, false);
+                                           wantsSilhouette ? &silhouette : nullptr, false, outer);
             if (base.ok()) {
                 clipMask = base.value.raster;
                 hasClip = true;
@@ -3577,14 +3947,9 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
 
     flushGroup();
 
-    // The sprite own placement: a sprite moved or turned through
-    // setSpriteTransform compiles where it was put.
-    if (!isIdentityTransform(sprite->transform)) {
-        result.raster = transformRaster(result.raster, sprite->transform,
-                                        resolved.sampling, resolved.coverageThreshold);
-        if (debug) {
-            result.trace.push_back("resolved sprite transform");
-        }
+    // The sprite's own placement was each layer's last move (see `outer`).
+    if (debug && outer != nullptr) {
+        result.trace.push_back("resolved sprite transform, layer by layer");
     }
 
     // Palette policy.
@@ -3666,8 +4031,12 @@ Result<CompileResult> LSContext::compileSprite(SpriteId id, const CompileProfile
         result.raster = RasterBuffer{};
     }
 
-    impl_->compileCache[key] = result;
-    impl_->graph.dirty.erase(id.value);
+    if (cacheable) {
+        impl_->compileCache[key] = result;
+        impl_->graph.dirty.erase(id.value);
+    } else {
+        settlePlaced(*impl_, id.value, CacheKind::Sprite);
+    }
     return Result<CompileResult>::ok(result);
 }
 
@@ -3721,27 +4090,24 @@ Result<CompileResult> LSContext::compileAssembly(SpriteId root, const CompilePro
     auto rootInverse = rootPlacement.value.inverse();
 
     for (SpriteId spriteId : order.value) {
-        auto compiled = compileSprite(spriteId, resolved);
-        if (compiled.fail()) {
-            return Result<CompileResult>::err(compiled.error);
-        }
-
-        // Each sprite already resolved its own transform, so only the chain
-        // above it is applied here.
-        RasterBuffer placed = compiled.value.raster;
+        // Each sprite is compiled where the chain above it puts it, on top of
+        // its own transform: its marks moved there as shapes, so a sprite its
+        // parent turns is drawn turned rather than drawn and then turned.
+        Mat3f relative;
         if (spriteId != root) {
             auto placement = impl_->placementOf(spriteId);
             if (placement.fail()) {
                 return Result<CompileResult>::err(placement.error);
             }
-            const Mat3f relative = rootInverse.ok()
-                ? rootInverse.value.mul(placement.value)
-                : placement.value;
-            if (!isIdentityTransform(relative)) {
-                placed = transformRaster(placed, relative, resolved.sampling,
-                                         resolved.coverageThreshold);
-            }
+            relative = rootInverse.ok() ? rootInverse.value.mul(placement.value) : placement.value;
         }
+        auto compiled = isIdentityTransform(relative)
+            ? compileSprite(spriteId, resolved)
+            : compileSpriteWithin(spriteId, resolved, &relative);
+        if (compiled.fail()) {
+            return Result<CompileResult>::err(compiled.error);
+        }
+        const RasterBuffer& placed = compiled.value.raster;
 
         for (int32_t y = 0; y < static_cast<int32_t>(result.raster.height); ++y) {
             for (int32_t x = 0; x < static_cast<int32_t>(result.raster.width); ++x) {
