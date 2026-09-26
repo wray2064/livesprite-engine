@@ -80,9 +80,20 @@ struct CurveDesc {
 enum class PenKind : uint8_t {
     Line,   // the points walked in order, one pixel wide or with the brush stamped along
     Dots,   // each point on its own, unjoined: a spray
+    Area,   // an area laid down whole (see AreaDesc): a lasso fill, a selection filled
 };
 
-// One stroke of a brush: the path the pointer took, and the brush.
+struct AreaDesc;
+
+// An area, exactly: the edges of its pixels as closed contours, filled
+// even-odd, so a hole is a contour too. What a set of pixels becomes when it
+// is to be a shape -- it draws those pixels where it is, and moves as one.
+struct AreaDesc {
+    std::vector<std::vector<Vec2f>> contours;
+};
+
+// One mark of a brush: the path the pointer took and the brush, or an area
+// laid down whole.
 struct PenStroke {
     std::vector<Vec2f> points;      // pixel centres, in the order drawn
     std::vector<float> sizes;       // the brush size at each point, when a pen's
@@ -90,20 +101,17 @@ struct PenStroke {
     float   size = 1.f;             // pixels across
     bool    round = false;          // round from 3 across up, square otherwise
     bool    pixelPerfect = true;    // walked again, a one-pixel line drops its L corners
-    bool    erase = false;          // takes its pixels from the strokes before it
+    // Takes its pixels from the marks before it -- but never from a line one
+    // pixel wide: those are cut where they are erased (cutStrokes), since a
+    // mask redrawn at an angle could clip a pixel of a line it never touched.
+    bool    erase = false;
     PenKind kind = PenKind::Line;
+    AreaDesc area;                  // the area, for PenKind::Area
 };
 
 // Freehand marks in the order they were made.
 struct StrokesDesc {
     std::vector<PenStroke> strokes;
-};
-
-// An area, exactly: the edges of its pixels as closed contours, filled
-// even-odd, so a hole is a contour too. What a set of pixels becomes when it
-// is to be a shape -- it draws those pixels where it is, and moves as one.
-struct AreaDesc {
-    std::vector<std::vector<Vec2f>> contours;
 };
 
 // A fill that finds its own edge -- what a paint bucket makes. Where it was
@@ -287,10 +295,11 @@ AreaDesc traceArea(const IntervalSet& set);
 // whatever the set is turned or scaled to.
 Vec2f deepestPoint(const IntervalSet& set);
 // Takes `erased` out of the strokes: a one-pixel line loses exactly those
-// pixels and is split where it lost them, and a spray loses those dots, so
-// nothing is left to come back when they are drawn somewhere else. A wider
-// stroke cannot lose part of its width that way; true when one lay under the
-// pixels, for the caller to add an erasing stroke over it.
+// pixels and is split where it lost them, a spray loses those dots, and an
+// area loses them from its edge -- so nothing is left to come back when they
+// are drawn somewhere else. A wider stroke cannot lose part of its width that
+// way; true when one lay under the pixels, for the caller to add an erasing
+// mark over it.
 bool cutStrokes(StrokesDesc& desc, const IntervalSet& erased);
 // A flood over a picture from `seed`: the connected pixels whose colour is
 // within `tolerance` of the seed's. Kept inside `within` when it is given.

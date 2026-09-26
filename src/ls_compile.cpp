@@ -1049,10 +1049,13 @@ IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& mo
         return {};
     }
     if (const GeometryData* geometry = env.impl->findGeometry(region->source)) {
-        if (const FaceDesc* face = std::get_if<FaceDesc>(&geometry->shape)) {
-            return faceThrough(*face, move.matrix, current);
+        const FaceDesc* face = std::get_if<FaceDesc>(&geometry->shape);
+        IntervalSet landed = face != nullptr ? faceThrough(*face, move.matrix, current)
+                                             : env.impl->rasterizeGeometryThrough(*geometry, move.matrix);
+        if (const GeometryData* erase = env.impl->findGeometry(region->erase)) {
+            landed = geom::subtractSets(landed, env.impl->rasterizeGeometryThrough(*erase, move.matrix));
         }
-        return env.impl->rasterizeGeometryThrough(*geometry, move.matrix);
+        return landed;
     }
     if (geom::keepsPixelGrid(move.matrix)) {
         return geom::mapAcrossGrid(region->coverage, move.matrix);
@@ -2232,10 +2235,22 @@ bool resolveMarkOperation(const CompileEnv& env, const Operation& op,
         // edge of where it lands, so the edge and the fill inside it are one
         // rasterization and cannot part.
         const IntervalSet landed = placed(stroke->targetRegion, *coverage);
-        const IntervalSet base = (env.move == nullptr && region != nullptr &&
-                                  !region->boundary.empty())
-            ? region->boundary
-            : geom::boundaryOf(landed);
+        IntervalSet base;
+        if (env.move == nullptr && region != nullptr && !region->boundary.empty()) {
+            base = region->boundary;
+        } else if (env.move != nullptr && region != nullptr &&
+                   env.impl->findGeometry(region->erase) != nullptr) {
+            // The edge of the whole shape where it lands, less what was
+            // erased: a hole rubbed in it does not grow an edge of its own.
+            const GeometryData* erase = env.impl->findGeometry(region->erase);
+            const GeometryData* source = env.impl->findGeometry(region->source);
+            const IntervalSet whole = source == nullptr
+                ? landed : env.impl->rasterizeGeometryThrough(*source, env.move->matrix);
+            base = geom::subtractSets(geom::boundaryOf(whole),
+                                      env.impl->rasterizeGeometryThrough(*erase, env.move->matrix));
+        } else {
+            base = geom::boundaryOf(landed);
+        }
         out.coverage = stroke->width > 1.f
             ? geom::intersectSets(geom::expand(base, stroke->width - 1.f, true), landed)
             : base;

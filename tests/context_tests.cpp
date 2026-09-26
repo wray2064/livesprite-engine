@@ -924,6 +924,67 @@ void testRotatedOutlinesStayClosed(LSContext& ctx) {
     }
 }
 
+// A shape erased stays a shape: what was rubbed out is kept as the strokes
+// that rubbed it, so the hole goes where the shape goes, and a hole rubbed in
+// a filled shape does not grow an edge of its own.
+void testErasingAShapeKeepsItAShape(LSContext& ctx) {
+    auto doc = ctx.createDocument({"erase", 32, 32});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"shape"});
+    const RegionId box = ctx.createRegionFromGeometry(
+        ctx.createRect(doc.value, {{6.f, 6.f}, 20.f, 20.f, 0.f}).value).value;
+    FillSolidOp fill;
+    fill.targetRegion = box;
+    fill.fallbackColor = {40, 90, 200, 255};
+    LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+    StrokeRegionBoundaryOp edge;
+    edge.targetRegion = box;
+    edge.fallbackColor = {230, 140, 60, 255};
+    LS_REQUIRE(ctx.addOperation(layer.value, edge).ok());
+
+    StrokesDesc rubbed;
+    PenStroke rub;
+    rub.size = 3.f;
+    rub.points = { {15.5f, 15.5f} };
+    rubbed.strokes = { rub };
+    const GeometryId erase = ctx.createStrokes(doc.value, rubbed).value;
+    LS_REQUIRE(ctx.setRegionErase(box, erase).ok());
+    LS_CHECK(ctx.getRegionErase(box).value == erase);
+    // Pixels have no shape to erase that way.
+    const RegionId loose = ctx.createRegionFromIntervals(doc.value, IntervalSet{}).value;
+    LS_CHECK(ctx.setRegionErase(loose, erase).fail());
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 32;
+    profile.outputHeight = 32;
+    profile.palette = PalettePolicy::Unconstrained;
+    auto drawn = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(drawn.ok());
+    // The hole is bare, and the pixels round it are fill, not edge.
+    LS_CHECK(readPixel(drawn.value.raster, 15, 15).a == 0);
+    LS_CHECK(readPixel(drawn.value.raster, 17, 15).b == 200);
+    LS_CHECK(readPixel(drawn.value.raster, 6, 6).r == 230);
+
+    // Turned a quarter, the hole turns with the shape.
+    RotateOp turn;
+    turn.targetLayer = layer.value;
+    turn.angleDegrees = 90.f;
+    turn.pivotFallback = {8.f, 8.f};
+    LS_REQUIRE(ctx.addOperation(layer.value, turn).ok());
+    auto turned = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(turned.ok());
+    // (15, 15) about (8, 8) a quarter turn lands at (0, 15).
+    LS_CHECK(readPixel(turned.value.raster, 0, 15).a == 0);
+    LS_CHECK(readPixel(turned.value.raster, 2, 15).b == 200);
+
+    // Growing the erase is an edit of its strokes.
+    rubbed.strokes.push_back(rub);
+    rubbed.strokes.back().points = { {20.5f, 20.5f} };
+    LS_REQUIRE(ctx.updateStrokes(erase, rubbed).ok());
+    LS_CHECK(!geom::contains(ctx.getRegionIntervals(box).value, {20, 20}));
+}
+
 int main() {
     auto ctx = LSContext::create();
     LS_REQUIRE_MAIN(ctx != nullptr);
@@ -943,6 +1004,7 @@ int main() {
     testFade(*ctx);
     testRotSprite(*ctx);
     testRotatedOutlinesStayClosed(*ctx);
+    testErasingAShapeKeepsItAShape(*ctx);
 
     return lstest::report("context");
 }

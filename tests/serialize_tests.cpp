@@ -355,6 +355,14 @@ void testFreehandRoundTrip() {
     fill.fallbackColor = {40, 90, 200, 255};
     LS_REQUIRE(source->addOperation(layer, fill).ok());
 
+    // A hole rubbed in the fill, kept as the stroke that rubbed it.
+    StrokesDesc rubbed;
+    PenStroke hole;
+    hole.size = 2.f;
+    hole.points = { {20.5f, 20.5f} };
+    rubbed.strokes = { hole };
+    LS_REQUIRE(source->setRegionErase(fill.targetRegion, source->createStrokes(doc, rubbed).value).ok());
+
     RotateOp turn;
     turn.targetLayer = layer;
     turn.angleDegrees = 21.f;

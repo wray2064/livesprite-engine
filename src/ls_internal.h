@@ -102,6 +102,10 @@ struct RegionData {
     IntervalSet coverage;
     IntervalSet boundary;    // authored closed loop, when the region came from pixels
     GeometryId  source;      // null unless the region was built from geometry
+    // What has been erased from it, as the strokes that erased it (a
+    // StrokesDesc), so erasing a shape leaves it a shape. Null when nothing
+    // has been. Only a region built from geometry has one.
+    GeometryId  erase;
     ColorRole   role = kColorRoleNone;   // standing role, used by fills that name none
 };
 
@@ -402,6 +406,8 @@ struct LSContext::Impl {
 
     // --- geometry ---------------------------------------------------------
     IntervalSet rasterizeGeometry(const GeometryData& data) const;
+    // Rebuilds a region built from geometry from its geometry and its erase.
+    void refreshRegion(RegionData& region) const;
     // The shape moved by `matrix`, then rasterized where it lands.
     IntervalSet rasterizeGeometryThrough(const GeometryData& data, const Mat3f& matrix) const;
     std::vector<Vec2f> geometryPath(const GeometryData& data) const;

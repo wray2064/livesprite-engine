@@ -581,6 +581,11 @@ public:
     // recognise one in a document it has just loaded: the link survives a save,
     // but without a way to ask, a rectangle comes back as anonymous pixels.
     Result<GeometryId>     getRegionSourceGeometry(RegionId r) const;
+    // What has been erased from a region built from geometry: strokes (a
+    // StrokesDesc geometry) whose pixels it no longer covers, so erasing a
+    // shape leaves it a shape. Null clears it.
+    VoidResult             setRegionErase(RegionId r, GeometryId strokes);
+    Result<GeometryId>     getRegionErase(RegionId r) const;
     Result<GeometryBounds> getRegionBounds(RegionId r) const;
     Result<IntervalSet>    getRegionIntervals(RegionId r) const;
     Result<IntervalSet>    getRegionBoundaryIntervals(RegionId r) const;

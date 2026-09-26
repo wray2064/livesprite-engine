@@ -8,6 +8,7 @@
 #include <livesprite/livesprite.h>
 
 #include <cmath>
+#include <cstdio>
 
 using namespace ls;
 
@@ -344,19 +345,27 @@ void testStrokesDrawWhatWasDrawn() {
     const std::vector<Vec2i> two = geom::brushFootprint(2, false);
     LS_CHECK(two.size() == 4 && two.front().x == 0 && two.front().y == 0);
 
-    // Dots, and an erase that takes one of them and leaves a later one.
+    // Dots, and an erase over a wide dot that leaves a later one be. Dots one
+    // pixel across are thin marks: an erasing mark passes them by, and
+    // erasing cuts them instead (see testCuttingALine).
     PenStroke dots;
     dots.kind = PenKind::Dots;
     dots.points = { centre(1, 1), centre(8, 8), centre(3, 7) };
+    PenStroke blob;
+    blob.kind = PenKind::Dots;
+    blob.size = 2.f;
+    blob.points = { centre(20, 20) };
     PenStroke erase;
     erase.erase = true;
-    erase.points = { centre(8, 8) };
+    erase.points = { centre(20, 20) };
     PenStroke after;
-    after.points = { centre(8, 8) };
-    desc.strokes = { dots, erase };
-    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 2);
-    desc.strokes = { dots, erase, after };
-    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 3);
+    after.points = { centre(20, 20) };
+    desc.strokes = { dots, blob, erase };
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 3 + 3);
+    desc.strokes = { dots, blob, erase, after };
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 3 + 4);
+    LS_CHECK(!geom::cutStrokes(desc, rect(8, 8, 9, 9)));
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(desc)) == 2 + 4);
 }
 
 // Erasing a thin line cuts it: the pixels go from the path itself, so there
@@ -377,6 +386,30 @@ void testCuttingALine() {
     // Turned, the two pieces stay two pieces.
     const Mat3f turn = Mat3f::aroundPivot(Mat3f::rotation(33.f), {6.f, 4.5f});
     LS_CHECK(geom::connectedComponents(geom::rasterizeStrokesThrough(desc, turn), true).size() == 2);
+
+    // An area loses exactly the pixels, from its edge.
+    StrokesDesc laid;
+    PenStroke patch;
+    patch.kind = PenKind::Area;
+    patch.area = geom::traceArea(rect(30, 30, 36, 34));
+    laid.strokes = { patch };
+    LS_CHECK(!geom::cutStrokes(laid, rect(32, 31, 34, 33)));
+    LS_CHECK(geom::pixelCount(geom::rasterizeStrokes(laid)) == 24 - 4);
+
+    // An erasing mark takes from a wide stroke but never from a thin line
+    // laid before it -- a thin line is cut instead, where it is erased.
+    PenStroke broad;
+    broad.size = 3.f;
+    broad.points = { {40.5f, 40.5f}, {46.5f, 40.5f} };
+    PenStroke hair;
+    hair.points = { {40.5f, 44.5f}, {46.5f, 44.5f} };
+    PenStroke rub;
+    rub.erase = true;
+    rub.size = 9.f;
+    rub.points = { {43.5f, 42.5f} };
+    laid.strokes = { broad, hair, rub };
+    const IntervalSet rubbed = geom::rasterizeStrokes(laid);
+    LS_CHECK(!geom::contains(rubbed, {43, 40}) && geom::contains(rubbed, {43, 44}));
 
     // A wide stroke cannot lose part of its width that way: it says so.
     PenStroke wide;

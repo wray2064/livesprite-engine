@@ -519,6 +519,9 @@ VoidResult LSContext::restoreDocumentState(DocumentId doc, const DocumentSnapsho
         if (data.source.valid()) {
             impl_->addDependencyEdge(data.source.value, id);
         }
+        if (data.erase.valid()) {
+            impl_->addDependencyEdge(data.erase.value, id);
+        }
     }
     for (const auto& [id, data] : state.sprites) {
         impl_->addDependencyEdge(id, doc.value);
@@ -696,6 +699,24 @@ Color LSContext::Impl::resolveColorRole(PaletteId palette, ColorRole role, Color
     }
     auto it = data->colors.find(role);
     return it == data->colors.end() ? fallback : it->second;
+}
+
+void LSContext::Impl::refreshRegion(RegionData& region) const {
+    const GeometryData* source = findGeometry(region.source);
+    if (source == nullptr) {
+        return;
+    }
+    IntervalSet whole = rasterizeGeometry(*source);
+    IntervalSet edge = geom::boundaryOf(whole);
+    if (const GeometryData* erase = findGeometry(region.erase)) {
+        const IntervalSet erased = rasterizeGeometry(*erase);
+        whole = geom::subtractSets(whole, erased);
+        edge = geom::subtractSets(edge, erased);
+    }
+    region.coverage = std::move(whole);
+    // The edge of the shape, less what was erased: rubbing out a hole in a
+    // filled shape does not draw a new edge round the hole.
+    region.boundary = std::move(edge);
 }
 
 IntervalSet LSContext::Impl::rasterizeGeometry(const GeometryData& data) const {
@@ -1142,6 +1163,7 @@ RegionId cloneRegion(LSContext::Impl& impl, RegionId source,
     }
     RegionData copy = *data;
     copy.source = cloneGeometry(impl, copy.source, madeGeometry);
+    copy.erase = cloneGeometry(impl, copy.erase, madeGeometry);
 
     const RegionId id = impl.mint<RegionId>();
     impl.regions.emplace(id.value, copy);
@@ -1150,6 +1172,9 @@ RegionId cloneRegion(LSContext::Impl& impl, RegionId source,
     }
     if (copy.source.valid()) {
         impl.addDependencyEdge(copy.source.value, id.value);
+    }
+    if (copy.erase.valid()) {
+        impl.addDependencyEdge(copy.erase.value, id.value);
     }
     madeRegions.emplace(source.value, id.value);
     return id;
@@ -1799,9 +1824,8 @@ VoidResult updateGeometryImpl(LSContext::Impl& impl, GeometryId id, const Desc& 
     // Regions built from this geometry rebuild immediately: geometry edits must
     // propagate to every dependent fill through the region.
     for (auto& [regionId, region] : impl.regions) {
-        if (region.source == id) {
-            region.coverage = impl.rasterizeGeometry(*data);
-            region.boundary = geom::boundaryOf(region.coverage);
+        if (region.source == id || region.erase == id) {
+            impl.refreshRegion(region);
             impl.markDirtyInternal(regionId);
         }
     }
@@ -1965,6 +1989,10 @@ void detachRegionFromSource(LSContext::Impl& impl, RegionData& region, RegionId 
         // region still has to hear about it changing.
         impl.removeDependencyEdge(region.source.value, id.value);
         region.source = GeometryId::null();
+    }
+    if (region.erase.valid()) {
+        impl.removeDependencyEdge(region.erase.value, id.value);
+        region.erase = GeometryId::null();
     }
 }
 
@@ -2240,6 +2268,43 @@ Result<RegionId> LSContext::expandRegion(RegionId r, float pixels) {
 
 Result<RegionId> LSContext::contractRegion(RegionId r, float pixels) {
     return insetRegion(r, { pixels, true, 2.f });
+}
+
+VoidResult LSContext::setRegionErase(RegionId r, GeometryId strokes) {
+    RegionData* data = impl_->findRegion(r);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (!data->source.valid()) {
+        return VoidResult::err(LSError::InvalidParameter);   // pixels are erased as pixels
+    }
+    if (strokes.valid()) {
+        const GeometryData* geometry = impl_->findGeometry(strokes);
+        if (geometry == nullptr) {
+            return VoidResult::err(LSError::InvalidId);
+        }
+        if (!std::holds_alternative<StrokesDesc>(geometry->shape)) {
+            return VoidResult::err(LSError::OperationTypeMismatch);
+        }
+    }
+    if (data->erase.valid()) {
+        impl_->removeDependencyEdge(data->erase.value, r.value);
+    }
+    data->erase = strokes;
+    if (strokes.valid()) {
+        impl_->addDependencyEdge(strokes.value, r.value);
+    }
+    impl_->refreshRegion(*data);
+    impl_->markDirtyInternal(r.value);
+    return VoidResult::success();
+}
+
+Result<GeometryId> LSContext::getRegionErase(RegionId r) const {
+    const RegionData* data = impl_->findRegion(r);
+    if (data == nullptr) {
+        return Result<GeometryId>::err(LSError::InvalidId);
+    }
+    return Result<GeometryId>::ok(data->erase);
 }
 
 Result<GeometryId> LSContext::getRegionSourceGeometry(RegionId r) const {

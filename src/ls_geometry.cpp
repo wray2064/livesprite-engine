@@ -963,6 +963,8 @@ Vec2i pixelOf(Vec2f p) {
     return { static_cast<int32_t>(std::floor(p.x)), static_cast<int32_t>(std::floor(p.y)) };
 }
 
+IntervalSet fillContours(const std::vector<std::vector<Vec2f>>& contours);
+
 // Drops the corner of every L in a walk: where the pixels either side of one
 // touch diagonally, the walk steps straight between them.
 std::vector<Vec2i> withoutCorners(const std::vector<Vec2i>& walk) {
@@ -1006,7 +1008,7 @@ void stamp(PixelSet& into, Vec2i at, const std::vector<Vec2i>& footprint) {
 // leaves is not the line -- moved, and walked again where it lands.
 PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
     PixelSet pixels;
-    if (stroke.points.empty()) {
+    if (stroke.points.empty() && stroke.kind != PenKind::Area) {
         return pixels;
     }
     const float scale = matrix == nullptr ? 1.f : std::sqrt(std::fabs(matrix->determinant()));
@@ -1024,6 +1026,26 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
         return found->second;
     };
 
+    if (stroke.kind == PenKind::Area) {
+        IntervalSet area;
+        if (matrix == nullptr) {
+            area = fillContours(stroke.area.contours);
+        } else {
+            std::vector<std::vector<Vec2f>> moved = stroke.area.contours;
+            for (auto& contour : moved) {
+                for (Vec2f& p : contour) {
+                    p = matrix->transformPoint(p);
+                }
+            }
+            area = fillContours(moved);
+        }
+        for (const Interval& interval : area.intervals) {
+            for (int32_t x = interval.x0; x < interval.x1; ++x) {
+                pixels.insert(pixelKey(x, interval.y));
+            }
+        }
+        return pixels;
+    }
     if (stroke.kind == PenKind::Dots) {
         for (size_t i = 0; i < stroke.points.size(); ++i) {
             const Vec2f at = matrix == nullptr ? stroke.points[i]
@@ -1076,13 +1098,25 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
     return pixels;
 }
 
+// A line or a spray one pixel wide: cut where it is erased, never masked.
+bool isThin(const PenStroke& stroke) {
+    return stroke.kind != PenKind::Area && stroke.sizes.empty() && stroke.size <= 1.f;
+}
+
 IntervalSet strokesPixels(const StrokesDesc& desc, const Mat3f* matrix) {
-    IntervalSet coverage;
+    IntervalSet thin;
+    IntervalSet solid;
     for (const PenStroke& stroke : desc.strokes) {
         const IntervalSet mark = fromPixelSet(strokePixels(stroke, matrix));
-        coverage = stroke.erase ? subtractSets(coverage, mark) : unionSets(coverage, mark);
+        if (stroke.erase) {
+            solid = subtractSets(solid, mark);
+        } else if (isThin(stroke)) {
+            thin = unionSets(thin, mark);
+        } else {
+            solid = unionSets(solid, mark);
+        }
     }
-    return coverage;
+    return unionSets(thin, solid);
 }
 
 // Even-odd over every contour at once, a pixel inside when its centre is.
@@ -1283,7 +1317,20 @@ bool cutStrokes(StrokesDesc& desc, const IntervalSet& erased) {
     std::vector<PenStroke> kept;
     kept.reserve(desc.strokes.size());
     for (const PenStroke& stroke : desc.strokes) {
-        const bool oneWide = stroke.sizes.empty() && stroke.size <= 1.f;
+        if (stroke.kind == PenKind::Area && !stroke.erase) {
+            // An area loses the pixels from its edge, exactly.
+            const IntervalSet was = fillContours(stroke.area.contours);
+            const IntervalSet left = subtractSets(was, erased);
+            if (pixelCount(left) == pixelCount(was)) {
+                kept.push_back(stroke);
+            } else if (!left.empty()) {
+                PenStroke smaller = stroke;
+                smaller.area = traceArea(left);
+                kept.push_back(std::move(smaller));
+            }
+            continue;
+        }
+        const bool oneWide = isThin(stroke);
         if (stroke.erase || !oneWide) {
             if (!stroke.erase && !wideTouched) {
                 const PixelSet drawn = strokePixels(stroke, nullptr);

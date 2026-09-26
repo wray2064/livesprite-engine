@@ -118,6 +118,9 @@ json::Value enc(const PenStroke& stroke) {
     out["pixelPerfect"] = enc(stroke.pixelPerfect);
     out["erase"] = enc(stroke.erase);
     out["kind"] = enc(static_cast<uint32_t>(stroke.kind));
+    if (stroke.kind == PenKind::Area) {
+        out["area"] = enc(stroke.area.contours);
+    }
     return out;
 }
 
@@ -278,6 +281,7 @@ void dec(const json::Value& value, const DecodeContext& ctx, PenStroke& out) {
     if (const json::Value* v = value.find("pixelPerfect")) { dec(*v, ctx, out.pixelPerfect); }
     if (const json::Value* v = value.find("erase"))        { dec(*v, ctx, out.erase); }
     if (const json::Value* v = value.find("kind"))         { dec(*v, ctx, out.kind); }
+    if (const json::Value* v = value.find("area"))         { dec(*v, ctx, out.area.contours); }
 }
 
 void dec(const json::Value& value, const DecodeContext& ctx, AreaDesc& out) {
@@ -721,8 +725,15 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
         json::Value obj = json::Value::object();
         obj["id"] = enc(regionId);
         obj["source"] = enc(data->source);
-        obj["coverage"] = enc(data->coverage);
-        obj["boundary"] = enc(data->boundary);
+        // A region made from geometry is its geometry: its pixels are worked
+        // out again when it is read, and never written down.
+        if (!data->source.valid()) {
+            obj["coverage"] = enc(data->coverage);
+            obj["boundary"] = enc(data->boundary);
+        }
+        if (data->erase.valid()) {
+            obj["erase"] = enc(data->erase);
+        }
         obj["role"] = enc(data->role);
         regions.push(std::move(obj));
     }
@@ -1107,6 +1118,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             reader.field("source", region.source);
             reader.field("coverage", region.coverage);
             reader.field("boundary", region.boundary);
+            reader.field("erase", region.erase);
             reader.field("role", region.role);
             const std::string unknown = collectUnknown(item, consumed);
             if (!unknown.empty()) {
@@ -1114,6 +1126,10 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             }
             if (region.source.valid()) {
                 impl.addDependencyEdge(region.source.value, id);
+                impl.refreshRegion(region);
+            }
+            if (region.erase.valid()) {
+                impl.addDependencyEdge(region.erase.value, id);
             }
             impl.regions.emplace(id, std::move(region));
             stored.regions.push_back(RegionId{id});
