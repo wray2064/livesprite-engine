@@ -83,6 +83,7 @@ json::Value enc(E value) { return enc(static_cast<uint32_t>(value)); }
 // local build and failed on the first GCC and Clang run.
 json::Value enc(const CurveDesc::Segment& segment);
 json::Value enc(const PenStroke& stroke);
+json::Value enc(const RegionClipTerm& term);
 json::Value enc(const AreaDesc& area);
 json::Value enc(const RampStop& stop);
 json::Value enc(const PluginValue& value);
@@ -121,6 +122,20 @@ json::Value enc(const PenStroke& stroke) {
     if (stroke.kind == PenKind::Area) {
         out["area"] = enc(stroke.area.contours);
     }
+    if (!stroke.tip.contours.empty()) {
+        out["tip"] = enc(stroke.tip.contours);
+    }
+    return out;
+}
+
+json::Value enc(const RegionClipTerm& term) {
+    json::Value out = json::Value::object();
+    if (term.region.valid()) {
+        out["region"] = enc(term.region);
+    } else {
+        out["geometry"] = enc(term.geometry);
+    }
+    out["op"] = enc(term.op);
     return out;
 }
 
@@ -244,6 +259,7 @@ void dec(const json::Value& value, const DecodeContext&, E& out) {
 // Declared ahead of the template for the same reason as the enc overloads.
 void dec(const json::Value& value, const DecodeContext& ctx, CurveDesc::Segment& out);
 void dec(const json::Value& value, const DecodeContext& ctx, PenStroke& out);
+void dec(const json::Value& value, const DecodeContext& ctx, RegionClipTerm& out);
 void dec(const json::Value& value, const DecodeContext& ctx, AreaDesc& out);
 void dec(const json::Value& value, const DecodeContext& ctx, RampStop& out);
 void dec(const json::Value& value, const DecodeContext& ctx, PluginValue& out);
@@ -282,6 +298,13 @@ void dec(const json::Value& value, const DecodeContext& ctx, PenStroke& out) {
     if (const json::Value* v = value.find("erase"))        { dec(*v, ctx, out.erase); }
     if (const json::Value* v = value.find("kind"))         { dec(*v, ctx, out.kind); }
     if (const json::Value* v = value.find("area"))         { dec(*v, ctx, out.area.contours); }
+    if (const json::Value* v = value.find("tip"))          { dec(*v, ctx, out.tip.contours); }
+}
+
+void dec(const json::Value& value, const DecodeContext& ctx, RegionClipTerm& out) {
+    if (const json::Value* v = value.find("region"))   { dec(*v, ctx, out.region); }
+    if (const json::Value* v = value.find("geometry")) { dec(*v, ctx, out.geometry); }
+    if (const json::Value* v = value.find("op"))       { dec(*v, ctx, out.op); }
 }
 
 void dec(const json::Value& value, const DecodeContext& ctx, AreaDesc& out) {
@@ -734,6 +757,9 @@ json::Value writeDocumentBody(const LSContext::Impl& impl, DocumentId docId,
         if (data->erase.valid()) {
             obj["erase"] = enc(data->erase);
         }
+        if (!data->clip.empty()) {
+            obj["clip"] = enc(data->clip);
+        }
         obj["role"] = enc(data->role);
         regions.push(std::move(obj));
     }
@@ -1119,6 +1145,7 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             reader.field("coverage", region.coverage);
             reader.field("boundary", region.boundary);
             reader.field("erase", region.erase);
+            reader.field("clip", region.clip);
             reader.field("role", region.role);
             const std::string unknown = collectUnknown(item, consumed);
             if (!unknown.empty()) {
@@ -1131,8 +1158,19 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
             if (region.erase.valid()) {
                 impl.addDependencyEdge(region.erase.value, id);
             }
+            for (const RegionClipTerm& term : region.clip) {
+                impl.addDependencyEdge(term.region.valid() ? term.region.value : term.geometry.value, id);
+            }
             impl.regions.emplace(id, std::move(region));
             stored.regions.push_back(RegionId{id});
+        }
+        // A clip reads the regions it names, which may come later in the
+        // file: worked out again now every region is in, oldest first.
+        for (RegionId regionId : stored.regions) {
+            RegionData* region = impl.findRegion(regionId);
+            if (region != nullptr && !region->clip.empty()) {
+                impl.refreshRegion(*region);
+            }
         }
     }
 

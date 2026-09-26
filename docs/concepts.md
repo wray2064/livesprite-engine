@@ -49,6 +49,16 @@ Regions come from three places:
 - **Boolean maths** — union, subtract, intersect, xor, clip, mask, invert,
   merge, split, connected components, simplify, inset, outset, expand, contract.
 
+A region built from geometry can also carry what was erased from it
+(`setRegionErase`: the strokes that erased it) and a clip (`setRegionClip`):
+other regions or shapes that add to, take from or narrow where it may draw,
+read from what they draw now and moved with it. That is how a pencil stroke
+kept to what lies under it -- a lock-alpha or replace ink, a shading pass, a
+stroke inside a selection -- stays a stroke. A freehand stroke's brush can be a
+shape of its own (`PenStroke::tip`), a custom brush stamped along the path and
+turned with it. All of these are shapes, so the region is still its geometry
+wherever it is turned.
+
 Regions can also be edited in place with `addPixelsToRegion`,
 `erasePixelsFromRegion` and `setRegionIntervals`, which is how a pencil
 accumulates without leaving one region per stroke. A region edited by hand stops

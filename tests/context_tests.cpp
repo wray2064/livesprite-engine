@@ -1139,6 +1139,137 @@ void testDeformsAndPlacementMoveShapes(LSContext& ctx) {
     }
 }
 
+// A region clipped to others draws only where they allow, follows them when
+// they change, keeps its clip through a save, and turns with them as shapes:
+// a stroke kept to what shows under it stays over it at any angle.
+void testRegionClips(LSContext& ctx) {
+    auto doc = ctx.createDocument({"clip", 48, 48});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"clip"});
+    const Color blue {30, 70, 110, 255};
+    const Color red {200, 40, 40, 255};
+    const Color yellow {240, 220, 60, 255};
+
+    // Under: a blue disc, and a red bar across part of it.
+    EllipseDesc round;
+    round.center = { 24.f, 24.f };
+    round.radiusX = 12.f;
+    round.radiusY = 12.f;
+    const GeometryId disc = ctx.createEllipse(doc.value, round).value;
+    const RegionId discRegion = ctx.createRegionFromGeometry(disc).value;
+    FillSolidOp under;
+    under.targetRegion = discRegion;
+    under.fallbackColor = blue;
+    LS_REQUIRE(ctx.addOperation(layer.value, under).ok());
+    const RegionId barRegion = ctx.createRegionFromGeometry(
+        ctx.createRect(doc.value, {{10.f, 20.f}, 28.f, 4.f, 0.f}).value).value;
+    FillSolidOp bar;
+    bar.targetRegion = barRegion;
+    bar.fallbackColor = red;
+    LS_REQUIRE(ctx.addOperation(layer.value, bar).ok());
+
+    // Over: a pencil line right across, kept to where the blue shows.
+    StrokesDesc pencil;
+    PenStroke line;
+    line.points = { { 4.5f, 14.5f }, { 43.5f, 34.5f } };
+    line.size = 3.f;
+    pencil.strokes.push_back(line);
+    const RegionId lineRegion = ctx.createRegionFromGeometry(
+        ctx.createStrokes(doc.value, pencil).value).value;
+    FillSolidOp over;
+    over.targetRegion = lineRegion;
+    over.fallbackColor = yellow;
+    const OperationId overOp = ctx.addOperation(layer.value, over).value;
+    const std::vector<RegionClipTerm> clip {
+        { discRegion, GeometryId{}, ClipOp::Add },
+        { barRegion, GeometryId{}, ClipOp::Remove },
+    };
+    LS_CHECK(ctx.setRegionClip(lineRegion, clip).ok());
+    LS_CHECK(ctx.getRegionClip(lineRegion).value.size() == 2);
+
+    const auto keptToBlue = [&]() {
+        const IntervalSet drawn = ctx.getRegionIntervals(lineRegion).value;
+        const IntervalSet showing = geom::subtractSets(ctx.getRegionIntervals(discRegion).value,
+                                                       ctx.getRegionIntervals(barRegion).value);
+        return !drawn.empty() && geom::subtractSets(drawn, showing).empty();
+    };
+    LS_CHECK(keptToBlue());
+
+    // A clip may not reach back to the region it clips.
+    LS_CHECK(ctx.setRegionClip(lineRegion, {{ lineRegion, GeometryId{}, ClipOp::Add }}).error ==
+             LSError::DependencyCycle);
+    LS_CHECK(ctx.setRegionClip(discRegion, {{ lineRegion, GeometryId{}, ClipOp::Add }}).error ==
+             LSError::DependencyCycle);
+
+    // The disc moves, and what the line may cover moves with it.
+    round.center = { 20.f, 26.f };
+    LS_REQUIRE(ctx.updateEllipse(disc, round).ok());
+    LS_CHECK(keptToBlue());
+
+    // Within narrows: only the left half of the canvas.
+    const GeometryId left = ctx.createRect(doc.value, {{0.f, 0.f}, 24.f, 48.f, 0.f}).value;
+    std::vector<RegionClipTerm> narrowed = clip;
+    narrowed.push_back({ RegionId{}, left, ClipOp::Within });
+    LS_CHECK(ctx.setRegionClip(lineRegion, narrowed).ok());
+    const Rect2i box = geom::bounds(ctx.getRegionIntervals(lineRegion).value);
+    LS_CHECK(!box.empty() && box.max.x <= 24);
+    LS_CHECK(keptToBlue());
+
+    // Through a save, the same: written with its clip, and read back to
+    // write the same again.
+    auto saved = ctx.serializeDocument(doc.value);
+    LS_REQUIRE(saved.ok());
+    auto once = LSContext::create();
+    auto loaded = once->deserializeDocument(saved.value);
+    LS_REQUIRE(loaded.ok());
+    auto again = once->serializeDocument(loaded.value);
+    LS_REQUIRE(again.ok());
+    auto twice = LSContext::create();
+    auto reloaded = twice->deserializeDocument(again.value);
+    LS_REQUIRE(reloaded.ok());
+    auto third = twice->serializeDocument(reloaded.value);
+    LS_REQUIRE(third.ok());
+    const std::string written(again.value.bytes.begin(), again.value.bytes.end());
+    LS_CHECK(written.find("\"clip\"") != std::string::npos);
+    LS_CHECK(third.value.bytes == again.value.bytes);
+
+    // Turned, every yellow pixel lands on a pixel the blue shows through.
+    RotateOp rotate;
+    rotate.targetLayer = layer.value;
+    rotate.pivotFallback = { 24.f, 24.f };
+    const OperationId turn = ctx.addOperation(layer.value, rotate).value;
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 48;
+    profile.outputHeight = 48;
+    profile.palette = PalettePolicy::Unconstrained;
+    for (float angle : { 17.f, 45.f, 90.f, 133.f }) {
+        LS_REQUIRE(ctx.setOperationParameter(turn, "angleDegrees", ParameterValue{angle}).ok());
+        auto with = ctx.compileSprite(sprite.value, profile);
+        LS_REQUIRE(with.ok());
+        LS_REQUIRE(ctx.setOperationParameter(overOp, "opacity", ParameterValue{0.f}).ok());
+        auto without = ctx.compileSprite(sprite.value, profile);
+        LS_REQUIRE(without.ok());
+        LS_REQUIRE(ctx.setOperationParameter(overOp, "opacity", ParameterValue{1.f}).ok());
+        int yellowSeen = 0;
+        int strayed = 0;
+        for (int y = 0; y < 48; ++y) {
+            for (int x = 0; x < 48; ++x) {
+                if (readPixel(with.value.raster, x, y) == yellow) {
+                    ++yellowSeen;
+                    strayed += readPixel(without.value.raster, x, y) == blue ? 0 : 1;
+                }
+            }
+        }
+        LS_CHECK(yellowSeen > 0);
+        LS_CHECK(strayed == 0);
+        if (strayed != 0) {
+            std::printf("    clip turned %.0f: %d of %d yellow pixels off the blue\n",
+                        static_cast<double>(angle), strayed, yellowSeen);
+        }
+    }
+}
+
 // A shape erased stays a shape: what was rubbed out is kept as the strokes
 // that rubbed it, so the hole goes where the shape goes, and a hole rubbed in
 // a filled shape does not grow an edge of its own.
@@ -1221,6 +1352,7 @@ int main() {
     testRotatedOutlinesStayClosed(*ctx);
     testErasingAShapeKeepsItAShape(*ctx);
     testDeformsAndPlacementMoveShapes(*ctx);
+    testRegionClips(*ctx);
 
     return lstest::report("context");
 }

@@ -451,7 +451,39 @@ void testScaledStrokesLandOnThePixels() {
     LS_CHECK(geom::pixelCount(geom::xorSets(stretched, rect(12, 8, 24, 16))) == 0);
 }
 
+// A custom brush: its own shape stamped along the path, and turned with it.
+void testStrokesWithATip() {
+    StrokesDesc desc;
+    PenStroke stamp;
+    stamp.kind = PenKind::Dots;
+    stamp.points = { { 10.5f, 10.5f } };
+    // An L of three pixels, round the pixel it is stamped on.
+    stamp.tip.contours = { { {0.f, 0.f}, {2.f, 0.f}, {2.f, 1.f}, {1.f, 1.f}, {1.f, 2.f}, {0.f, 2.f} } };
+    desc.strokes = { stamp };
+    const IntervalSet one = geom::rasterizeStrokes(desc);
+    LS_CHECK(geom::pixelCount(one) == 3);
+    LS_CHECK(geom::contains(one, {10, 10}) && geom::contains(one, {11, 10}) &&
+             geom::contains(one, {10, 11}));
+
+    // Along a path, at every pixel it walks: two rows, the top one longer.
+    PenStroke line = stamp;
+    line.kind = PenKind::Line;
+    line.points = { { 10.5f, 10.5f }, { 14.5f, 10.5f } };
+    desc.strokes = { line };
+    const IntervalSet drawn = geom::rasterizeStrokes(desc);
+    LS_CHECK(geom::pixelCount(drawn) == 11);
+
+    // A quarter turn turns the stamp with the path; so does any other.
+    const Mat3f quarter = Mat3f::aroundPivot(Mat3f::rotation(90.f), { 16.f, 16.f });
+    const IntervalSet turned = geom::rasterizeStrokesThrough(desc, quarter);
+    LS_CHECK(geom::pixelCount(turned) == 11);
+    const Mat3f slant = Mat3f::aroundPivot(Mat3f::rotation(30.f), { 16.f, 16.f });
+    const int64_t slanted = geom::pixelCount(geom::rasterizeStrokesThrough(desc, slant));
+    LS_CHECK(slanted >= 9 && slanted <= 16);
+}
+
 int main() {
+    testStrokesWithATip();
     testScaledStrokesLandOnThePixels();
     testStrokesDrawWhatWasDrawn();
     testCuttingALine();

@@ -109,6 +109,11 @@ struct PenStroke {
     bool    erase = false;
     PenKind kind = PenKind::Line;
     AreaDesc area;                  // the area, for PenKind::Area
+    // A custom brush: its own shape, stamped at every pixel the path walks
+    // (or at each dot) in place of the size-and-round brush, and turned with
+    // the stroke when it is turned. Pixel edges, the top-left corner of the
+    // pixel it is stamped on at 0,0. Empty for the ordinary brush.
+    AreaDesc tip;
 };
 
 // Freehand marks in the order they were made.
@@ -122,6 +127,26 @@ struct StrokesDesc {
 // before it, kept within two pixels of the area moved -- so it meets the line
 // that bounds it however that line was redrawn, with no gap and no leak. If
 // nothing on the layer bounds it there, the area moved is the fill.
+// How one term of a region's clip bears on it (see LSContext::setRegionClip).
+enum class ClipOp : uint8_t {
+    Add,        // where the term draws, the region may
+    Remove,     // where the term draws, it may not
+    Within,     // outside what the term draws, it may not
+};
+
+// One term of a region's clip: what a region draws, or what a shape covers.
+// Exactly one of the two is set.
+struct RegionClipTerm {
+    RegionId   region;
+    GeometryId geometry;
+    ClipOp     op = ClipOp::Add;
+};
+
+inline bool operator==(const RegionClipTerm& a, const RegionClipTerm& b) {
+    return a.region == b.region && a.geometry == b.geometry && a.op == b.op;
+}
+inline bool operator!=(const RegionClipTerm& a, const RegionClipTerm& b) { return !(a == b); }
+
 struct FaceDesc {
     Vec2f    seed;                  // deep inside, in the layer's own space
     AreaDesc area;

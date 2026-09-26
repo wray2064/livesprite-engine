@@ -1156,6 +1156,18 @@ IntervalSet regionThrough(const CompileEnv& env, RegionId id, const MarkMove& mo
         if (const GeometryData* erase = env.impl->findGeometry(region->erase)) {
             landed = geom::subtractSets(landed, geometryThrough(env, *erase, move));
         }
+        // Where it may draw (see setRegionClip): what its terms draw, moved
+        // with it.
+        IntervalSet allowed;
+        if (foldClip(region->clip, [&](const RegionClipTerm& term) {
+                if (term.region.valid()) {
+                    return regionThrough(env, term.region, move, current);
+                }
+                const GeometryData* shape = env.impl->findGeometry(term.geometry);
+                return shape == nullptr ? IntervalSet{} : geometryThrough(env, *shape, move);
+            }, &allowed)) {
+            landed = geom::intersectSets(landed, allowed);
+        }
         return landed;
     }
     if (move.affine() && geom::keepsPixelGrid(move.matrix)) {

@@ -586,6 +586,17 @@ public:
     // shape leaves it a shape. Null clears it.
     VoidResult             setRegionErase(RegionId r, GeometryId strokes);
     Result<GeometryId>     getRegionErase(RegionId r) const;
+    // Where a region built from geometry may draw, besides its own shape: the
+    // Add and Remove terms, in order, build what is allowed -- from nothing,
+    // or from everywhere when there are none -- and each Within term then
+    // narrows it. Terms are read from what they draw now, and moved with the
+    // region when its layer moves, so a pencil stroke kept to what lies under
+    // it stays a stroke wherever it is turned. An empty list clears it. A
+    // term that would make the region clip itself, however indirectly, is
+    // refused.
+    VoidResult                          setRegionClip(RegionId r,
+                                                      const std::vector<RegionClipTerm>& clip);
+    Result<std::vector<RegionClipTerm>> getRegionClip(RegionId r) const;
     Result<GeometryBounds> getRegionBounds(RegionId r) const;
     Result<IntervalSet>    getRegionIntervals(RegionId r) const;
     Result<IntervalSet>    getRegionBoundaryIntervals(RegionId r) const;

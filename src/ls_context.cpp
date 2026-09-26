@@ -522,6 +522,9 @@ VoidResult LSContext::restoreDocumentState(DocumentId doc, const DocumentSnapsho
         if (data.erase.valid()) {
             impl_->addDependencyEdge(data.erase.value, id);
         }
+        for (const RegionClipTerm& term : data.clip) {
+            impl_->addDependencyEdge(term.region.valid() ? term.region.value : term.geometry.value, id);
+        }
     }
     for (const auto& [id, data] : state.sprites) {
         impl_->addDependencyEdge(id, doc.value);
@@ -701,12 +704,49 @@ Color LSContext::Impl::resolveColorRole(PaletteId palette, ColorRole role, Color
     return it == data->colors.end() ? fallback : it->second;
 }
 
+bool foldClip(const std::vector<RegionClipTerm>& clip,
+              const std::function<IntervalSet(const RegionClipTerm&)>& drawn,
+              IntervalSet* allowed) {
+    if (clip.empty()) {
+        return false;
+    }
+    IntervalSet set;
+    bool narrowed = false;
+    for (const RegionClipTerm& term : clip) {
+        if (term.op == ClipOp::Add) {
+            set = geom::unionSets(set, drawn(term));
+            narrowed = true;
+        } else if (term.op == ClipOp::Remove) {
+            set = geom::subtractSets(set, drawn(term));
+            narrowed = true;
+        }
+    }
+    for (const RegionClipTerm& term : clip) {
+        if (term.op == ClipOp::Within) {
+            set = narrowed ? geom::intersectSets(set, drawn(term)) : drawn(term);
+            narrowed = true;
+        }
+    }
+    *allowed = std::move(set);
+    return true;
+}
+
 void LSContext::Impl::refreshRegion(RegionData& region) const {
     const GeometryData* source = findGeometry(region.source);
     if (source == nullptr) {
         return;
     }
     IntervalSet whole = rasterizeGeometry(*source);
+    IntervalSet allowed;
+    if (foldClip(region.clip, [this](const RegionClipTerm& term) {
+            if (const RegionData* other = findRegion(term.region)) {
+                return other->coverage;
+            }
+            const GeometryData* shape = findGeometry(term.geometry);
+            return shape == nullptr ? IntervalSet{} : rasterizeGeometry(*shape);
+        }, &allowed)) {
+        whole = geom::intersectSets(whole, allowed);
+    }
     IntervalSet edge = geom::boundaryOf(whole);
     if (const GeometryData* erase = findGeometry(region.erase)) {
         const IntervalSet erased = rasterizeGeometry(*erase);
@@ -1236,6 +1276,11 @@ RegionId cloneRegion(LSContext::Impl& impl, RegionId source,
     RegionData copy = *data;
     copy.source = cloneGeometry(impl, copy.source, madeGeometry);
     copy.erase = cloneGeometry(impl, copy.erase, madeGeometry);
+    // What it is clipped to comes along too, as copies of their own.
+    for (RegionClipTerm& term : copy.clip) {
+        term.region = cloneRegion(impl, term.region, madeGeometry, madeRegions);
+        term.geometry = cloneGeometry(impl, term.geometry, madeGeometry);
+    }
 
     const RegionId id = impl.mint<RegionId>();
     impl.regions.emplace(id.value, copy);
@@ -1247,6 +1292,10 @@ RegionId cloneRegion(LSContext::Impl& impl, RegionId source,
     }
     if (copy.erase.valid()) {
         impl.addDependencyEdge(copy.erase.value, id.value);
+    }
+    for (const RegionClipTerm& term : copy.clip) {
+        impl.addDependencyEdge(term.region.valid() ? term.region.value : term.geometry.value,
+                               id.value);
     }
     madeRegions.emplace(source.value, id.value);
     return id;
@@ -2066,6 +2115,11 @@ void detachRegionFromSource(LSContext::Impl& impl, RegionData& region, RegionId 
         impl.removeDependencyEdge(region.erase.value, id.value);
         region.erase = GeometryId::null();
     }
+    for (const RegionClipTerm& term : region.clip) {
+        impl.removeDependencyEdge(term.region.valid() ? term.region.value : term.geometry.value,
+                                  id.value);
+    }
+    region.clip.clear();
 }
 
 } // namespace
@@ -2369,6 +2423,76 @@ VoidResult LSContext::setRegionErase(RegionId r, GeometryId strokes) {
     impl_->refreshRegion(*data);
     impl_->markDirtyInternal(r.value);
     return VoidResult::success();
+}
+
+namespace {
+
+// Whether `from`'s clip reaches `target`, through the regions it names.
+bool clipReaches(const LSContext::Impl& impl, RegionId from, RegionId target, int depth = 0) {
+    if (from == target) {
+        return true;
+    }
+    const RegionData* data = impl.findRegion(from);
+    if (data == nullptr || depth > 64) {
+        return depth > 64;
+    }
+    for (const RegionClipTerm& term : data->clip) {
+        if (term.region.valid() && clipReaches(impl, term.region, target, depth + 1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint64_t clipTermEntity(const RegionClipTerm& term) {
+    return term.region.valid() ? term.region.value : term.geometry.value;
+}
+
+} // namespace
+
+VoidResult LSContext::setRegionClip(RegionId r, const std::vector<RegionClipTerm>& clip) {
+    RegionData* data = impl_->findRegion(r);
+    if (data == nullptr) {
+        return VoidResult::err(LSError::InvalidId);
+    }
+    if (!clip.empty() && !data->source.valid()) {
+        return VoidResult::err(LSError::InvalidParameter);   // pixels are clipped as pixels
+    }
+    for (const RegionClipTerm& term : clip) {
+        if (term.region.valid() == term.geometry.valid()) {
+            return VoidResult::err(LSError::InvalidParameter);
+        }
+        if (term.region.valid() && impl_->findRegion(term.region) == nullptr) {
+            return VoidResult::err(LSError::InvalidId);
+        }
+        if (term.geometry.valid() && impl_->findGeometry(term.geometry) == nullptr) {
+            return VoidResult::err(LSError::InvalidId);
+        }
+        if (term.region.valid() && clipReaches(*impl_, term.region, r)) {
+            return VoidResult::err(LSError::DependencyCycle);
+        }
+    }
+    for (const RegionClipTerm& term : data->clip) {
+        const uint64_t entity = clipTermEntity(term);
+        if (entity != data->source.value && entity != data->erase.value) {
+            impl_->removeDependencyEdge(entity, r.value);
+        }
+    }
+    data->clip = clip;
+    for (const RegionClipTerm& term : data->clip) {
+        impl_->addDependencyEdge(clipTermEntity(term), r.value);
+    }
+    impl_->refreshRegion(*data);
+    impl_->markDirtyInternal(r.value);
+    return VoidResult::success();
+}
+
+Result<std::vector<RegionClipTerm>> LSContext::getRegionClip(RegionId r) const {
+    const RegionData* data = impl_->findRegion(r);
+    if (data == nullptr) {
+        return Result<std::vector<RegionClipTerm>>::err(LSError::InvalidId);
+    }
+    return Result<std::vector<RegionClipTerm>>::ok(data->clip);
 }
 
 Result<GeometryId> LSContext::getRegionErase(RegionId r) const {

@@ -106,8 +106,17 @@ struct RegionData {
     // StrokesDesc), so erasing a shape leaves it a shape. Null when nothing
     // has been. Only a region built from geometry has one.
     GeometryId  erase;
+    // Where else it may draw (see setRegionClip). Only a region built from
+    // geometry has one.
+    std::vector<RegionClipTerm> clip;
     ColorRole   role = kColorRoleNone;   // standing role, used by fills that name none
 };
+
+// Folds a clip (see setRegionClip), each term's pixels from `drawn`. False
+// when it narrows nothing, and then `allowed` is untouched.
+bool foldClip(const std::vector<RegionClipTerm>& clip,
+              const std::function<IntervalSet(const RegionClipTerm&)>& drawn,
+              IntervalSet* allowed);
 
 struct OperationData {
     LayerId    layer;

@@ -12,6 +12,7 @@
 #include "ls_math.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <deque>
@@ -1035,6 +1036,17 @@ struct Mover {
     const Mat3f* matrix = nullptr;
     const PointMap* map = nullptr;
     Vec2f apply(Vec2f p) const { return matrix != nullptr ? matrix->transformPoint(p) : (*map)(p); }
+    // The move near `p`, less where it goes: how it turns and stretches
+    // there, as a b / c d.
+    std::array<float, 4> linearAt(Vec2f p) const {
+        if (matrix != nullptr) {
+            return { matrix->m[0], matrix->m[1], matrix->m[3], matrix->m[4] };
+        }
+        const Vec2f here = (*map)(p);
+        const Vec2f across = (*map)({ p.x + 1.f, p.y });
+        const Vec2f down = (*map)({ p.x, p.y + 1.f });
+        return { across.x - here.x, down.x - here.x, across.y - here.y, down.y - here.y };
+    }
     // How far a step of one pixel across, and one down, goes near `p`.
     Vec2f stretchAt(Vec2f p) const {
         if (matrix != nullptr) {
@@ -1048,6 +1060,33 @@ struct Mover {
                  std::sqrt((down.x - here.x) * (down.x - here.x) + (down.y - here.y) * (down.y - here.y)) };
     }
 };
+
+// A custom brush's stamp, as offsets from the pixel it is placed on: its
+// shape as drawn, or turned and stretched as the move turns and stretches it
+// near `at`, about the middle of that pixel.
+std::vector<Vec2i> tipFootprint(const AreaDesc& tip, const Mover* mover, Vec2f at) {
+    std::vector<std::vector<Vec2f>> contours = tip.contours;
+    if (mover != nullptr) {
+        const std::array<float, 4> l = mover->linearAt(at);
+        for (auto& contour : contours) {
+            for (Vec2f& q : contour) {
+                const float x = q.x - 0.5f;
+                const float y = q.y - 0.5f;
+                q = { l[0] * x + l[1] * y + 0.5f, l[2] * x + l[3] * y + 0.5f };
+            }
+        }
+    }
+    std::vector<Vec2i> out;
+    for (const Interval& run : fillContours(contours).intervals) {
+        for (int32_t x = run.x0; x < run.x1; ++x) {
+            out.push_back({ x, run.y });
+        }
+    }
+    if (out.empty()) {
+        out.push_back({ 0, 0 });            // too thin to cover a pixel centre: one pixel
+    }
+    return out;
+}
 
 // One stroke's pixels. As drawn (`mover` null) the points are the pixels
 // laid down, joined where the pointer jumped. Moved, the path is simplified
@@ -1092,13 +1131,20 @@ PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
     }
 
     const Vec2f stretch = mover == nullptr ? Vec2f{ 1.f, 1.f } : mover->stretchAt(stroke.points.front());
+    // A custom brush stamps its own shape on each pixel of the walk.
+    const bool tipped = !stroke.tip.contours.empty();
+    const std::vector<Vec2i> tip = tipped ? tipFootprint(stroke.tip, mover, stroke.points.front())
+                                          : std::vector<Vec2i>{};
     const auto sizeOf = [&](size_t i) {
-        return i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
+        return tipped ? 1.f : i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
     };
-    const auto widthAt = [&](size_t i) { return scaledSize(sizeOf(i), stretch.x); };
-    const auto heightAt = [&](size_t i) { return scaledSize(sizeOf(i), stretch.y); };
+    const auto widthAt = [&](size_t i) { return scaledSize(sizeOf(i), tipped ? 1.f : stretch.x); };
+    const auto heightAt = [&](size_t i) { return scaledSize(sizeOf(i), tipped ? 1.f : stretch.y); };
     std::map<std::pair<int, int>, std::vector<Vec2i>> footprints;
     const auto footprintOf = [&](int w, int h) -> const std::vector<Vec2i>& {
+        if (tipped) {
+            return tip;
+        }
         auto found = footprints.find({ w, h });
         if (found == footprints.end()) {
             found = footprints.emplace(std::make_pair(w, h), stretchedFootprint(w, h, stroke.round)).first;
@@ -1156,7 +1202,7 @@ PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
             walkFrom.push_back(from[i]);
         }
     }
-    const bool oneWide = stroke.sizes.empty() && firstW <= 1 && firstH <= 1;
+    const bool oneWide = !tipped && stroke.sizes.empty() && firstW <= 1 && firstH <= 1;
     if (mover != nullptr && oneWide && stroke.pixelPerfect) {
         walk = withoutCorners(walk);
         walkFrom.assign(walk.size(), 0);
@@ -1169,7 +1215,8 @@ PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
 
 // A line or a spray one pixel wide: cut where it is erased, never masked.
 bool isThin(const PenStroke& stroke) {
-    return stroke.kind != PenKind::Area && stroke.sizes.empty() && stroke.size <= 1.f;
+    return stroke.kind != PenKind::Area && stroke.sizes.empty() && stroke.size <= 1.f &&
+           stroke.tip.contours.empty();
 }
 
 IntervalSet strokesPixels(const StrokesDesc& desc, const Mover* mover) {

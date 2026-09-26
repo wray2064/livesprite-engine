@@ -112,6 +112,10 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
     // those dependents holding stale output.
     std::set<uint64_t> visited;
     std::deque<uint64_t> queue { entityId };
+    // Regions clipped to what changed (see setRegionClip), worked out again
+    // once the walk is done -- oldest first, since a clip names regions made
+    // before it.
+    std::vector<uint64_t> clipped;
     while (!queue.empty()) {
         const uint64_t current = queue.front();
         queue.pop_front();
@@ -120,6 +124,12 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
         }
         graph.dirty.insert(current);
         invalidateCacheFor(current);
+        if (current != entityId) {
+            auto region = regions.find(current);
+            if (region != regions.end() && !region->second.clip.empty()) {
+                clipped.push_back(current);
+            }
+        }
 
         auto it = graph.dependents.find(current);
         if (it == graph.dependents.end()) {
@@ -128,6 +138,10 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
         for (uint64_t dependent : it->second) {
             queue.push_back(dependent);
         }
+    }
+    std::sort(clipped.begin(), clipped.end());
+    for (uint64_t id : clipped) {
+        refreshRegion(regions.at(id));
     }
 }
 
