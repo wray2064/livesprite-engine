@@ -1006,22 +1006,60 @@ void stamp(PixelSet& into, Vec2i at, const std::vector<Vec2i>& footprint) {
 // laid down, joined where the pointer jumped. Moved, the path is simplified
 // back to the lines the hand drew -- the stair of pixels a straight line
 // leaves is not the line -- moved, and walked again where it lands.
+// A brush stamp `w` by `h`, as offsets from the pixel it is placed on --
+// brushFootprint's rule, stretched: a brush on a layer scaled more one way
+// than the other is stretched with it, and stays level with the grid.
+std::vector<Vec2i> stretchedFootprint(int w, int h, bool round) {
+    if (w == h) {
+        return w <= 1 ? std::vector<Vec2i>{} : brushFootprint(w, round);
+    }
+    std::vector<Vec2i> out;
+    const int beforeX = (w - 1) / 2;
+    const int beforeY = (h - 1) / 2;
+    const float halfW = static_cast<float>(w) * 0.5f;
+    const float halfH = static_cast<float>(h) * 0.5f;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            if (round && std::min(w, h) >= 3) {
+                const float dx = (static_cast<float>(x) + 0.5f - halfW) / halfW;
+                const float dy = (static_cast<float>(y) + 0.5f - halfH) / halfH;
+                if (dx * dx + dy * dy > 0.8f) {
+                    continue;
+                }
+            }
+            out.push_back({ x - beforeX, y - beforeY });
+        }
+    }
+    return out;
+}
+
+// One stroke's pixels. As drawn (`matrix` null) the points are the pixels
+// laid down, joined where the pointer jumped. Moved, the path is simplified
+// back to the lines the hand drew -- the stair of pixels a straight line
+// leaves is not the line -- moved, and walked again where it lands, the brush
+// stretched as the move stretches each axis. A brush an even number of pixels
+// across sits on the corner between pixels, not on a pixel, so the walk for
+// it runs half a pixel up and to the left: that is what lands a line doubled
+// in size exactly on the pixels of the line, doubled.
 PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
     PixelSet pixels;
     if (stroke.points.empty() && stroke.kind != PenKind::Area) {
         return pixels;
     }
-    const float scale = matrix == nullptr ? 1.f : std::sqrt(std::fabs(matrix->determinant()));
-    const auto sizeAt = [&](size_t i) {
-        const float size = i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
-        return scaledSize(size, scale);
+    const float scaleX = matrix == nullptr ? 1.f
+        : std::sqrt(matrix->m[0] * matrix->m[0] + matrix->m[3] * matrix->m[3]);
+    const float scaleY = matrix == nullptr ? 1.f
+        : std::sqrt(matrix->m[1] * matrix->m[1] + matrix->m[4] * matrix->m[4]);
+    const auto sizeOf = [&](size_t i) {
+        return i < stroke.sizes.size() ? stroke.sizes[i] : stroke.size;
     };
-    std::map<int, std::vector<Vec2i>> footprints;
-    const auto footprintOf = [&](int size) -> const std::vector<Vec2i>& {
-        auto found = footprints.find(size);
+    const auto widthAt = [&](size_t i) { return scaledSize(sizeOf(i), scaleX); };
+    const auto heightAt = [&](size_t i) { return scaledSize(sizeOf(i), scaleY); };
+    std::map<std::pair<int, int>, std::vector<Vec2i>> footprints;
+    const auto footprintOf = [&](int w, int h) -> const std::vector<Vec2i>& {
+        auto found = footprints.find({ w, h });
         if (found == footprints.end()) {
-            found = footprints.emplace(size, size <= 1 ? std::vector<Vec2i>{}
-                                                       : brushFootprint(size, stroke.round)).first;
+            found = footprints.emplace(std::make_pair(w, h), stretchedFootprint(w, h, stroke.round)).first;
         }
         return found->second;
     };
@@ -1046,11 +1084,19 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
         }
         return pixels;
     }
+    // Where a stamp that big is placed for a point: its pixel, or for an even
+    // brush the pixel up and to the left of the corner nearest it.
+    const auto placeOf = [](Vec2f at, int w, int h) {
+        return Vec2i{ static_cast<int32_t>(std::floor(at.x - (w % 2 == 0 ? 0.5f : 0.f))),
+                      static_cast<int32_t>(std::floor(at.y - (h % 2 == 0 ? 0.5f : 0.f))) };
+    };
     if (stroke.kind == PenKind::Dots) {
         for (size_t i = 0; i < stroke.points.size(); ++i) {
             const Vec2f at = matrix == nullptr ? stroke.points[i]
                                                : matrix->transformPoint(stroke.points[i]);
-            stamp(pixels, pixelOf(at), footprintOf(sizeAt(i)));
+            const int w = widthAt(i);
+            const int h = heightAt(i);
+            stamp(pixels, placeOf(at, w, h), footprintOf(w, h));
         }
         return pixels;
     }
@@ -1073,27 +1119,29 @@ PixelSet strokePixels(const PenStroke& stroke, const Mat3f* matrix) {
             p = matrix->transformPoint(p);
         }
     }
+    // The walk runs over stamp places; the first point's brush says whether
+    // those are pixels or corners.
+    const int firstW = widthAt(from.front());
+    const int firstH = heightAt(from.front());
     std::vector<Vec2i> walk;
     std::vector<size_t> walkFrom;
-    walk.push_back(pixelOf(path.front()));
+    walk.push_back(placeOf(path.front(), firstW, firstH));
     walkFrom.push_back(from.front());
     for (size_t i = 0; i + 1 < path.size(); ++i) {
-        const size_t before = walk.size();
         std::vector<Vec2i> run;
-        walkBetween(pixelOf(path[i]), pixelOf(path[i + 1]), run);
+        walkBetween(placeOf(path[i], firstW, firstH), placeOf(path[i + 1], firstW, firstH), run);
         for (size_t r = 1; r < run.size(); ++r) {
             walk.push_back(run[r]);
             walkFrom.push_back(from[i]);
         }
-        (void)before;
     }
-    const bool oneWide = stroke.sizes.empty() && sizeAt(0) <= 1;
+    const bool oneWide = stroke.sizes.empty() && firstW <= 1 && firstH <= 1;
     if (matrix != nullptr && oneWide && stroke.pixelPerfect) {
         walk = withoutCorners(walk);
         walkFrom.assign(walk.size(), 0);
     }
     for (size_t i = 0; i < walk.size(); ++i) {
-        stamp(pixels, walk[i], footprintOf(sizeAt(walkFrom[i])));
+        stamp(pixels, walk[i], footprintOf(widthAt(walkFrom[i]), heightAt(walkFrom[i])));
     }
     return pixels;
 }

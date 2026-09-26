@@ -433,7 +433,26 @@ void testAreasTraceExactly() {
     LS_CHECK(deep.x == 4.5f && deep.y == 2.5f);
 }
 
+// A pencil block scaled lands on exactly the pixels the block scaled covers:
+// doubled, every pixel two by two; stretched three one way and two the
+// other, three by two.
+void testScaledStrokesLandOnThePixels() {
+    StrokesDesc block;
+    for (int y = 4; y < 8; ++y) {
+        PenStroke row;
+        for (int x = 4; x < 8; ++x) {
+            row.points.push_back({ static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f });
+        }
+        block.strokes.push_back(row);
+    }
+    const IntervalSet doubled = geom::rasterizeStrokesThrough(block, Mat3f::scaling({ 2.f, 2.f }));
+    LS_CHECK(geom::pixelCount(geom::xorSets(doubled, rect(8, 8, 16, 16))) == 0);
+    const IntervalSet stretched = geom::rasterizeStrokesThrough(block, Mat3f::scaling({ 3.f, 2.f }));
+    LS_CHECK(geom::pixelCount(geom::xorSets(stretched, rect(12, 8, 24, 16))) == 0);
+}
+
 int main() {
+    testScaledStrokesLandOnThePixels();
     testStrokesDrawWhatWasDrawn();
     testCuttingALine();
     testAreasTraceExactly();
