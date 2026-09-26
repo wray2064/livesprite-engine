@@ -1407,6 +1407,37 @@ struct LSContext::LayerCloneTables {
     uint64_t cloneSprite  = 0;
 };
 
+namespace {
+
+// A copied face closed in by what was copied with it is closed in by the
+// copies. Run again as each layer of a copied sprite is made, so a face whose
+// walls are on a layer copied after its own finds them too.
+void remapFaceWalls(LSContext::Impl& impl, const std::map<uint64_t, uint64_t>& geometry,
+                    const std::map<uint64_t, uint64_t>& regions) {
+    for (const auto& [from, to] : geometry) {
+        (void)from;
+        GeometryData* made = impl.findGeometry(GeometryId{ to });
+        FaceDesc* face = made == nullptr ? nullptr : std::get_if<FaceDesc>(&made->shape);
+        if (face == nullptr || face->walls.empty()) {
+            continue;
+        }
+        wallEdges(impl, *face, to, false);
+        for (RegionClipTerm& wall : face->walls) {
+            auto region = regions.find(wall.region.value);
+            if (wall.region.valid() && region != regions.end()) {
+                wall.region = RegionId{ region->second };
+            }
+            auto shape = geometry.find(wall.geometry.value);
+            if (wall.geometry.valid() && shape != geometry.end()) {
+                wall.geometry = GeometryId{ shape->second };
+            }
+        }
+        wallEdges(impl, *face, to, true);
+    }
+}
+
+} // namespace
+
 Result<LayerId> LSContext::cloneLayerInto(LayerId source, SpriteId into, int32_t atIndex,
                                           LayerCloneTables& tables) {
     const LayerData* layerData = impl_->findLayer(source);
@@ -1461,28 +1492,7 @@ Result<LayerId> LSContext::cloneLayerInto(LayerId source, SpriteId into, int32_t
         addOperation(clonedLayer.value, copy);
     }
 
-    // A copied face closed in by what was copied with it is closed in by the
-    // copies.
-    for (const auto& [from, to] : tables.geometry) {
-        (void)from;
-        GeometryData* made = impl_->findGeometry(GeometryId{ to });
-        FaceDesc* face = made == nullptr ? nullptr : std::get_if<FaceDesc>(&made->shape);
-        if (face == nullptr || face->walls.empty()) {
-            continue;
-        }
-        wallEdges(*impl_, *face, to, false);
-        for (RegionClipTerm& wall : face->walls) {
-            auto region = tables.regions.find(wall.region.value);
-            if (wall.region.valid() && region != tables.regions.end()) {
-                wall.region = RegionId{ region->second };
-            }
-            auto shape = tables.geometry.find(wall.geometry.value);
-            if (wall.geometry.valid() && shape != tables.geometry.end()) {
-                wall.geometry = GeometryId{ shape->second };
-            }
-        }
-        wallEdges(*impl_, *face, to, true);
-    }
+    remapFaceWalls(*impl_, tables.geometry, tables.regions);
 
     // Into place. createLayer appends; a copy usually wants to sit right
     // above what it copied.
@@ -1583,6 +1593,7 @@ Result<SpriteId> LSContext::cloneSprite(SpriteId src) {
     for (LayerId layer : sourceCopy.layers) {
         cloneLayerInto(layer, cloneId, -1, tables);
     }
+    remapFaceWalls(*impl_, tables.geometry, tables.regions);
 
     if (SpriteData* clone = impl_->findSprite(cloneId)) {
         clone->palette = sourceCopy.palette;
