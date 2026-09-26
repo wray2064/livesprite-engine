@@ -166,7 +166,7 @@ template<typename Ar> void mapShape(Ar& ar, PolylineDesc& op) { F(points) F(clos
 template<typename Ar> void mapShape(Ar& ar, RectDesc& op)     { F(origin) F(width) F(height) F(cornerRadius) }
 template<typename Ar> void mapShape(Ar& ar, EllipseDesc& op)  { F(center) F(radiusX) F(radiusY) }
 template<typename Ar> void mapShape(Ar& ar, CircleDesc& op)   { F(center) F(radius) }
-template<typename Ar> void mapShape(Ar& ar, PolygonDesc& op)  { F(vertices) }
+template<typename Ar> void mapShape(Ar& ar, PolygonDesc& op)  { F(vertices) F(includeEdges) }
 template<typename Ar> void mapShape(Ar& ar, CurveDesc& op)    { F(segments) F(closed) }
 
 

@@ -51,6 +51,11 @@ struct CircleDesc {
 
 struct PolygonDesc {
     std::vector<Vec2f> vertices;
+    // The pixels the edges pass through count as inside too, every corner
+    // included -- a polygon as a pixel artist draws one through the pixels
+    // clicked. Off, a pixel is inside when its centre is (top-left rule), so
+    // corners on pixel centres lose the right and bottom edges.
+    bool               includeEdges = false;
 };
 
 // Cubic Bezier curve

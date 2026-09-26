@@ -721,7 +721,36 @@ IntervalSet rasterizeCircle(const CircleDesc& desc) {
 }
 
 IntervalSet rasterizePolygon(const PolygonDesc& desc) {
-    return fillPolygon(desc.vertices);
+    IntervalSet filled = fillPolygon(desc.vertices);
+    if (!desc.includeEdges || desc.vertices.empty()) {
+        return filled;
+    }
+    // Each edge as the line of pixels between the corners' pixels.
+    IntervalSet edges;
+    const size_t n = desc.vertices.size();
+    for (size_t i = 0; i < n; ++i) {
+        const Vec2f& p = desc.vertices[i];
+        const Vec2f& q = desc.vertices[(i + 1) % n];
+        int32_t x0 = static_cast<int32_t>(std::floor(p.x));
+        int32_t y0 = static_cast<int32_t>(std::floor(p.y));
+        const int32_t x1 = static_cast<int32_t>(std::floor(q.x));
+        const int32_t y1 = static_cast<int32_t>(std::floor(q.y));
+        const int32_t dx =  std::abs(x1 - x0);
+        const int32_t dy = -std::abs(y1 - y0);
+        const int32_t sx = x0 < x1 ? 1 : -1;
+        const int32_t sy = y0 < y1 ? 1 : -1;
+        int32_t err = dx + dy;
+        while (true) {
+            edges.intervals.push_back({ y0, x0, x0 + 1 });
+            if (x0 == x1 && y0 == y1) {
+                break;
+            }
+            const int32_t e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+    }
+    return unionSets(normalize(std::move(filled)), normalize(std::move(edges)));
 }
 
 IntervalSet rasterizeCurve(const CurveDesc& desc) {

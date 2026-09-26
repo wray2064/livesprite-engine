@@ -293,7 +293,31 @@ void testDeterminism() {
 
 } // namespace
 
+
+// A polygon through pixel centres: by the top-left rule it loses its right
+// and bottom edges; with includeEdges every corner and edge pixel is in.
+static void testPolygonIncludesItsEdges() {
+    ls::PolygonDesc square;
+    square.vertices = { {4.5f, 4.5f}, {20.5f, 4.5f}, {20.5f, 20.5f}, {4.5f, 20.5f} };
+    const ls::IntervalSet strict = ls::geom::rasterizePolygon(square);
+    LS_CHECK(ls::geom::pixelCount(strict) == 256);
+    LS_CHECK(!ls::geom::contains(strict, {20, 20}));
+    square.includeEdges = true;
+    const ls::IntervalSet drawn = ls::geom::rasterizePolygon(square);
+    LS_CHECK(ls::geom::pixelCount(drawn) == 289);
+    LS_CHECK(ls::geom::contains(drawn, {20, 20}) && ls::geom::contains(drawn, {4, 20}));
+    LS_CHECK(!ls::geom::contains(drawn, {21, 20}));
+
+    ls::PolygonDesc triangle;
+    triangle.vertices = { {2.5f, 2.5f}, {12.5f, 2.5f}, {2.5f, 12.5f} };
+    triangle.includeEdges = true;
+    const ls::IntervalSet tri = ls::geom::rasterizePolygon(triangle);
+    LS_CHECK(ls::geom::contains(tri, {12, 2}) && ls::geom::contains(tri, {2, 12}) &&
+             ls::geom::contains(tri, {7, 7}));
+}
+
 int main() {
+    testPolygonIncludesItsEdges();
     testNormalize();
     testBooleanOps();
     testMorphology();
