@@ -96,7 +96,7 @@ static void test_boundary_is_defensive(void) {
     ls_context_destroy(ctx);
 }
 
-/* The catalogue is enumerable, so a binding does not hard-code 40 names. */
+/* The catalogue is enumerable, so a binding does not hard-code 41 names. */
 static void test_operation_catalogue(void) {
     size_t count = ls_operation_type_count();
     size_t needed = 0;
@@ -105,7 +105,7 @@ static void test_operation_catalogue(void) {
     int found_rotate = 0;
     size_t i;
 
-    CHECK(count == 40);
+    CHECK(count == 41);
 
     for (i = 0; i < count; ++i) {
         CHECK_OK(ls_operation_type_name(i, name, sizeof(name), &needed));

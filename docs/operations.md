@@ -1,6 +1,6 @@
 # Operations
 
-The 40 operation types, what each one does, and the parameters worth knowing.
+The 41 operation types, what each one does, and the parameters worth knowing.
 Full field lists are in [`ls_operations.h`](../include/livesprite/ls_operations.h);
 at runtime, `describeOperation(id)` reports every drivable parameter and its
 type.
@@ -64,6 +64,15 @@ vertex, a cap at each open end. `StrokeJoin::Miter` falls back to a bevel when a
 turn is too sharp for `miterLimit`. `SnapPolicy::Grid` puts vertices on pixel
 corners and `HalfGrid` on pixel centres, which is what keeps a one-pixel line
 from straddling two columns. A `strokePattern` thins the mark along its length.
+
+## Erasing
+
+| Operation | What it does |
+|---|---|
+| `ClearRegionOp` | Clears what the layer has drawn so far inside `targetRegion`. Shapes and fills before it stay live, anything after it is not cleared, and outlines or shadows after it follow the erased result |
+
+An eraser that works on shapes without baking them: the erased pixels are a
+region like any other, grown and shrunk by the same calls.
 
 ## Outlines
 

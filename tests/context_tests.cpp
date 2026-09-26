@@ -397,6 +397,62 @@ void testReferenceLayers(LSContext& ctx) {
     LS_CHECK(readPixel(again.value.raster, 9, 9).a != 0);
 }
 
+// An erase: a region cleared from what the layer has drawn so far, with the
+// shape under it still a shape -- widen it and the erased patch stays put --
+// and a later fill not erased.
+void testClearRegion(LSContext& ctx) {
+    auto doc = ctx.createDocument({"erase", 16, 16});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"figure"});
+    auto rect = ctx.createRect(doc.value, {{2.f, 2.f}, 6.f, 6.f, 0.f});
+    auto region = ctx.createRegionFromGeometry(rect.value);
+    FillSolidOp fill;
+    fill.targetRegion = region.value;
+    fill.fallbackColor = {200, 60, 60, 255};
+    LS_CHECK(ctx.addOperation(layer.value, fill).ok());
+    const auto at = [](std::vector<Vec2i> points) {
+        PixelRegionDesc desc;
+        for (Vec2i p : points) {
+            desc.pixels.push_back({p, Color::black()});
+        }
+        return desc;
+    };
+    auto hole = ctx.createRegionFromPixels(doc.value, at({{4, 4}, {5, 4}}));
+    LS_REQUIRE(hole.ok());
+    ClearRegionOp clear;
+    clear.targetRegion = hole.value;
+    auto cleared = ctx.addOperation(layer.value, clear);
+    LS_REQUIRE(cleared.ok());
+    LS_CHECK(ctx.getLayerOperations(layer.value).value[1].type == "ClearRegionOp");
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = 16;
+    profile.outputHeight = 16;
+    auto compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    LS_CHECK(readPixel(compiled.value.raster, 4, 4).a == 0);
+    LS_CHECK(readPixel(compiled.value.raster, 5, 4).a == 0);
+    LS_CHECK(readPixel(compiled.value.raster, 6, 4).a == 255);
+    LS_CHECK(readPixel(compiled.value.raster, 3, 3).a == 255);
+
+    // The erased region grows, and the picture follows.
+    LS_CHECK(ctx.addPixelsToRegion(hole.value, at({{6, 4}})).ok());
+    compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    LS_CHECK(readPixel(compiled.value.raster, 6, 4).a == 0);
+
+    // A fill added after the erase is not erased.
+    FillSolidOp over;
+    over.targetRegion = ctx.createRegionFromPixels(doc.value, at({{4, 4}})).value;
+    over.fallbackColor = {20, 200, 60, 255};
+    LS_CHECK(ctx.addOperation(layer.value, over).ok());
+    compiled = ctx.compileSprite(sprite.value, profile);
+    LS_REQUIRE(compiled.ok());
+    LS_CHECK(readPixel(compiled.value.raster, 4, 4).g == 200);
+    LS_CHECK(readPixel(compiled.value.raster, 5, 4).a == 0);
+}
+
 // A drop shadow: the layer's own drawing, moved and in one colour, only where
 // the layer draws nothing -- following the drawing when it changes.
 void testDropShadow(LSContext& ctx) {
@@ -495,6 +551,7 @@ int main() {
     testDependencies(*ctx);
     testReferenceLayers(*ctx);
     testDropShadow(*ctx);
+    testClearRegion(*ctx);
     testRotSprite(*ctx);
 
     return lstest::report("context");

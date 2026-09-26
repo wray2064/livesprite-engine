@@ -2445,6 +2445,29 @@ Result<CompileResult> LSContext::compileLayerWithin(
             continue;
         }
 
+        // An erase: what is drawn so far goes, inside the region.
+        if (const auto* clear = std::get_if<ClearRegionOp>(&data->op)) {
+            const IntervalSet* coverage = regionCoverage(env, clear->targetRegion);
+            if (coverage == nullptr) {
+                env.note("op " + std::to_string(opId.value) + ": skipped ClearRegionOp (missing input)");
+                continue;
+            }
+            for (const Interval& interval : coverage->intervals) {
+                for (int32_t x = interval.x0; x < interval.x1; ++x) {
+                    setRasterPixel(result.raster, x, interval.y, Color::transparent());
+                }
+            }
+            stampTags(*coverage, 0);
+            // Marks already laid down lose the cleared pixels too, so an
+            // outline cleanup or join after this sees what is left.
+            for (auto& [markId, resolvedMark] : history) {
+                resolvedMark.coverage = geom::subtractSets(resolvedMark.coverage, *coverage);
+            }
+            env.note("op " + std::to_string(opId.value) + ": cleared " +
+                     std::to_string(geom::pixelCount(*coverage)) + " px");
+            continue;
+        }
+
         // Outline post-processing reads the marks already laid down.
         if (const auto* cleanup = std::get_if<CleanupOutlineOp>(&data->op)) {
             auto target = history.find(cleanup->targetOutlineOp.value);
