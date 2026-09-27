@@ -599,6 +599,11 @@ public:
     Result<std::vector<RegionClipTerm>> getRegionClip(RegionId r) const;
     Result<GeometryBounds> getRegionBounds(RegionId r) const;
     Result<IntervalSet>    getRegionIntervals(RegionId r) const;
+    // What one mark operation draws where it was drawn -- a line's own pixels,
+    // a fill's region less what is erased -- in its layer's own space, before
+    // any transform, whatever else the layer holds. Refused for an operation
+    // that is not a mark (a transform, an outline, a plugin).
+    Result<IntervalSet>    getOperationCoverage(OperationId op) const;
     Result<IntervalSet>    getRegionBoundaryIntervals(RegionId r) const;
     Result<bool>           regionContainsPoint(RegionId r, Vec2i point) const;
     Result<RegionId>       traceBoundary(DocumentId doc, const RasterBuffer& source,

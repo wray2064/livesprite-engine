@@ -1442,6 +1442,13 @@ void testErasingALineTakesOnlyTheLine(LSContext& ctx) {
     LS_CHECK(readPixel(drawn.value.raster, 8, 16) == orange);    // and nowhere else
     LS_CHECK(readPixel(drawn.value.raster, 16, 13) == blue);     // the fill untouched
 
+    // What the line draws, asked of the line: its own pixels, less the erase.
+    auto covers = ctx.getOperationCoverage(lineOp);
+    LS_REQUIRE(covers.ok());
+    LS_CHECK(geom::pixelCount(covers.value) == 21);
+    LS_CHECK(geom::contains(covers.value, {8, 16}) && !geom::contains(covers.value, {16, 16}));
+    LS_CHECK(!geom::contains(covers.value, {8, 13}));
+
     RotateOp rotate;
     rotate.targetLayer = layer.value;
     rotate.angleDegrees = 90.f;

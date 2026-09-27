@@ -3142,6 +3142,34 @@ static void settlePlaced(LSContext::Impl& impl, uint64_t entity, CacheKind kind)
     impl.graph.dirty.erase(entity);
 }
 
+Result<IntervalSet> LSContext::getOperationCoverage(OperationId id) const {
+    const OperationData* data = impl_->findOperation(id);
+    if (data == nullptr) {
+        return Result<IntervalSet>::err(LSError::InvalidId);
+    }
+    if (!isGeometryMark(data->op) || std::holds_alternative<ClearRegionOp>(data->op)) {
+        return Result<IntervalSet>::err(LSError::OperationTypeMismatch);
+    }
+    const LayerData* layer = impl_->findLayer(data->layer);
+    if (layer == nullptr) {
+        return Result<IntervalSet>::err(LSError::InvalidId);
+    }
+    const DocumentId docId = impl_->documentOfSprite(layer->sprite);
+    CompileEnv env;
+    env.impl = impl_.get();
+    env.profile = impl_->resolveProfileDefaults(CompileProfile{}, docId);
+    env.doc = docId;
+    env.sprite = layer->sprite;
+    env.palette = impl_->effectivePalette(layer->sprite);
+    env.spriteBounds = impl_->spriteContentBounds(layer->sprite);
+    Mark mark;
+    const RasterBuffer nothing;
+    if (!resolveMarkOperation(env, data->op, nothing, mark)) {
+        return Result<IntervalSet>::ok(IntervalSet{});
+    }
+    return Result<IntervalSet>::ok(std::move(mark.coverage));
+}
+
 Result<CompileResult> LSContext::compileLayer(LayerId id, const CompileProfile& profile) {
     return compileLayerWithin(id, profile, nullptr, false);
 }
