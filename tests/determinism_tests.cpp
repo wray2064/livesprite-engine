@@ -244,8 +244,10 @@ struct Golden {
 const Golden kGolden[] = {
     { "rotation-37deg",   sceneRotation,       0xe05fc5357846333bull },
     { "skew-23deg",       sceneSkew,           0xf81119f97f7a953bull },
-    { "angular-dither",   sceneAngularDither,  0x31b96a2ff741b453ull },
-    { "ellipse-outline",  sceneEllipseOutline, 0x0c9273d10c016213ull },
+    // Re-recorded when an ellipse became the pixels whose centres are inside
+    // it, the same test on both axes (a disc and an ellipse both draw one).
+    { "angular-dither",   sceneAngularDither,  0x0b4375e6cf99e3bbull },
+    { "ellipse-outline",  sceneEllipseOutline, 0xebbc7ca8f5811c63ull },
 };
 
 void testGoldenHashes() {

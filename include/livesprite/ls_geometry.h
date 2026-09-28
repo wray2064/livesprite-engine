@@ -97,7 +97,10 @@ struct AreaDesc {
 // One mark of a brush: the path the pointer took and the brush, or an area
 // laid down whole.
 struct PenStroke {
-    std::vector<Vec2f> points;      // pixel centres, in the order drawn
+    // Pixel centres, in the order drawn. A centre names its pixel however the
+    // stroke is turned or flipped; a point on a pixel's edge names two, and
+    // a quarter turn can resolve it to the other one.
+    std::vector<Vec2f> points;
     std::vector<float> sizes;       // the brush size at each point, when a pen's
                                     // pressure set it; empty for a steady brush
     float   size = 1.f;             // pixels across
@@ -298,10 +301,18 @@ IntervalSet rasterizeCurve(const CurveDesc& desc);
 // encloses, rather than a picture of either, turned and resampled.
 
 // True when the matrix carries every pixel onto exactly one pixel: quarter
-// turns, mirrors and whole-pixel moves. Such a move loses nothing, so the
-// shape's own pixels are carried across (mapAcrossGrid) rather than redrawn.
+// turns, mirrors and whole-pixel moves. A shape moved so is described where
+// it lands and drawn there by its own rule, which is what makes the move
+// exact; mapAcrossGrid, which carries pixels across, is for what really is
+// pixels -- a picture brought in.
 bool keepsPixelGrid(const Mat3f& matrix);
 IntervalSet mapAcrossGrid(const IntervalSet& set, const Mat3f& matrix);
+
+// The move keepsPixelGrid says it is, exactly: a quarter turn built from a
+// sine and a cosine is 0 and 1 give or take a few millionths, and a point by
+// a pixel's edge moved by the approximation can land a pixel over. Its
+// entries rounded to the whole numbers they stand for.
+Mat3f exactGridMove(const Mat3f& matrix);
 
 // A move of the plane that is not one matrix -- a bend, a warp, a lattice:
 // where each point goes. Shapes moved by one are cut into steps no longer

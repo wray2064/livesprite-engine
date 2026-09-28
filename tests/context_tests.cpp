@@ -948,10 +948,15 @@ void testDeformsAndPlacementMoveShapes(LSContext& ctx) {
 
     // What a pencil draws round the wobble, and what a paint bucket keeps of
     // its flood inside that line: the pixels it reached, traced.
+    // A pencil puts its points in the middle of the pixels it draws (see
+    // PenStroke): a point on a pixel's edge would name two pixels at once, and
+    // which of them a turn resolves it to is not the one it was drawn on.
     StrokesDesc pencil;
     PenStroke ring;
-    ring.points = wobble;
-    ring.points.push_back(wobble.front());
+    for (const Vec2f& p : wobble) {
+        ring.points.push_back({ std::floor(p.x) + 0.5f, std::floor(p.y) + 0.5f });
+    }
+    ring.points.push_back(ring.points.front());
     pencil.strokes.push_back(ring);
     FaceDesc face;
     {

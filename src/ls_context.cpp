@@ -844,17 +844,72 @@ std::vector<Vec2f> rectOutline(const RectDesc& rect) {
 
 IntervalSet LSContext::Impl::rasterizeGeometryThrough(const GeometryData& data,
                                                      const Mat3f& matrix) const {
-    // A move that keeps the pixel grid carries the shape's own pixels across,
-    // so a quarter turn or a whole-pixel move is exactly the drawing, moved.
-    if (geom::keepsPixelGrid(matrix)) {
-        return geom::mapAcrossGrid(rasterizeGeometry(data), matrix);
-    }
     const auto moved = [&matrix](std::vector<Vec2f> points) {
         for (Vec2f& p : points) {
             p = matrix.transformPoint(p);
         }
         return points;
     };
+    // A move that keeps the pixel grid -- a quarter turn, a flip, a whole-pixel
+    // step -- turns a shape into the same kind of shape: points go to points,
+    // a box to a box, an ellipse to an ellipse with its radii swapped when it
+    // is turned a quarter. So the shape is described where it lands and drawn
+    // by the rule it is always drawn by: the math resolved in place, which is
+    // what makes it exact. (It used to be drawn unmoved and its pixels carried
+    // across, which hid a rule that was not the same both ways round.)
+    if (geom::keepsPixelGrid(matrix)) {
+        const Mat3f exact = geom::exactGridMove(matrix);
+        const auto landedAt = [&exact](std::vector<Vec2f> points) {
+            for (Vec2f& p : points) {
+                p = exact.transformPoint(p);
+            }
+            return points;
+        };
+        const bool swapsAxes = std::fabs(exact.m[0]) < 0.5f;
+        GeometryData landed = data;
+        const bool described = std::visit([&](auto& shape) -> bool {
+            using Shape = std::decay_t<decltype(shape)>;
+            // Strokes and areas move below, as they always have.
+            constexpr bool kDescribed =
+                !std::is_same_v<Shape, StrokesDesc> && !std::is_same_v<Shape, AreaDesc> &&
+                !std::is_same_v<Shape, FaceDesc>;
+            if constexpr (std::is_same_v<Shape, PointDesc>) {
+                shape.position = exact.transformPoint(shape.position);
+            } else if constexpr (std::is_same_v<Shape, LineDesc>) {
+                shape.start = exact.transformPoint(shape.start);
+                shape.end = exact.transformPoint(shape.end);
+            } else if constexpr (std::is_same_v<Shape, PolylineDesc>) {
+                shape.points = landedAt(shape.points);
+            } else if constexpr (std::is_same_v<Shape, RectDesc>) {
+                const Vec2f a = exact.transformPoint(shape.origin);
+                const Vec2f b = exact.transformPoint({ shape.origin.x + shape.width,
+                                                        shape.origin.y + shape.height });
+                shape.origin = { std::min(a.x, b.x), std::min(a.y, b.y) };
+                shape.width = std::fabs(b.x - a.x);
+                shape.height = std::fabs(b.y - a.y);
+            } else if constexpr (std::is_same_v<Shape, EllipseDesc>) {
+                shape.center = exact.transformPoint(shape.center);
+                if (swapsAxes) {
+                    std::swap(shape.radiusX, shape.radiusY);
+                }
+            } else if constexpr (std::is_same_v<Shape, CircleDesc>) {
+                shape.center = exact.transformPoint(shape.center);
+            } else if constexpr (std::is_same_v<Shape, PolygonDesc>) {
+                shape.vertices = landedAt(shape.vertices);
+            } else if constexpr (std::is_same_v<Shape, CurveDesc>) {
+                for (CurveDesc::Segment& s : shape.segments) {
+                    s.p0 = exact.transformPoint(s.p0);
+                    s.cp0 = exact.transformPoint(s.cp0);
+                    s.cp1 = exact.transformPoint(s.cp1);
+                    s.p1 = exact.transformPoint(s.p1);
+                }
+            }
+            return kDescribed;
+        }, landed.shape);
+        if (described) {
+            return rasterizeGeometry(landed);
+        }
+    }
     return std::visit([&](const auto& shape) -> IntervalSet {
         using Shape = std::decay_t<decltype(shape)>;
         if constexpr (std::is_same_v<Shape, PointDesc>) {

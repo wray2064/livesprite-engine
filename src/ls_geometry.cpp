@@ -204,28 +204,45 @@ IntervalSet fillPolygon(const std::vector<Vec2f>& points) {
     return normalize(std::move(set));
 }
 
-void plotLine(PixelSet& pixels, Vec2f a, Vec2f b) {
-    // Bresenham over pixel centers.
-    int32_t x0 = static_cast<int32_t>(std::floor(a.x));
-    int32_t y0 = static_cast<int32_t>(std::floor(a.y));
-    const int32_t x1 = static_cast<int32_t>(std::floor(b.x));
-    const int32_t y1 = static_cast<int32_t>(std::floor(b.y));
-
-    const int32_t dx =  std::abs(x1 - x0);
-    const int32_t dy = -std::abs(y1 - y0);
-    const int32_t sx = x0 < x1 ? 1 : -1;
-    const int32_t sy = y0 < y1 ? 1 : -1;
-    int32_t err = dx + dy;
-
-    while (true) {
-        pixels.insert(pixelKey(x0, y0));
-        if (x0 == x1 && y0 == y1) {
-            break;
-        }
-        const int32_t e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
+// The pixels of a line from one pixel to another: one for each step along
+// its longer axis, each the nearest the true line between the two centres.
+// Where the line passes exactly half-way between two, the one nearer the
+// start. That is a rule of the line alone -- distances and which end it
+// starts from -- so a line turned a quarter or flipped walks exactly its
+// pixels turned or flipped. (Bresenham broke those ties by which axis was
+// which, and a turned line came out with a stair moved.)
+template <typename Visit>
+void walkLine(int32_t x0, int32_t y0, int32_t x1, int32_t y1, Visit&& visit) {
+    const int32_t dx = x1 - x0;
+    const int32_t dy = y1 - y0;
+    const int32_t n = std::max(std::abs(dx), std::abs(dy));
+    if (n == 0) {
+        visit(x0, y0);
+        return;
     }
+    const bool alongX = std::abs(dx) >= std::abs(dy);
+    const int32_t step = (alongX ? dx : dy) > 0 ? 1 : -1;
+    const int64_t minor = alongX ? dy : dx;
+    for (int32_t t = 0; t <= n; ++t) {
+        // The minor axis's offset, minor * t / n, to the nearest whole pixel,
+        // an exact half toward the start.
+        const int64_t scaled = minor * t;
+        const int64_t size = scaled < 0 ? -scaled : scaled;
+        int64_t whole = size / n;
+        if (2 * (size % n) > n) {
+            ++whole;
+        }
+        const int32_t off = static_cast<int32_t>(scaled < 0 ? -whole : whole);
+        const int32_t along = step * t;
+        visit(alongX ? x0 + along : x0 + off, alongX ? y0 + off : y0 + along);
+    }
+}
+
+void plotLine(PixelSet& pixels, Vec2f a, Vec2f b) {
+    // Between the pixels the two points are in.
+    walkLine(static_cast<int32_t>(std::floor(a.x)), static_cast<int32_t>(std::floor(a.y)),
+             static_cast<int32_t>(std::floor(b.x)), static_cast<int32_t>(std::floor(b.y)),
+             [&pixels](int32_t x, int32_t y) { pixels.insert(pixelKey(x, y)); });
 }
 
 Vec2f bezierPoint(const CurveDesc::Segment& seg, float t) {
@@ -698,20 +715,31 @@ IntervalSet rasterizeEllipse(const EllipseDesc& desc) {
         return set;
     }
 
+    // A pixel is the ellipse's when its centre is inside the ellipse: the same
+    // test on both axes, so an ellipse turned a quarter or flipped resolves to
+    // its pixels turned or flipped -- the rule depends on the shape alone, not
+    // on which way round it lies. (Rows used to be sampled at their centres
+    // but spans taken to every pixel they touched, which made an ellipse wider
+    // than tall differ from the same ellipse turned, and a small circle square.)
     const int32_t y0 = static_cast<int32_t>(std::floor(desc.center.y - desc.radiusY));
     const int32_t y1 = static_cast<int32_t>(std::ceil(desc.center.y + desc.radiusY));
+    const int32_t x0 = static_cast<int32_t>(std::floor(desc.center.x - desc.radiusX));
+    const int32_t x1 = static_cast<int32_t>(std::ceil(desc.center.x + desc.radiusX));
 
     for (int32_t y = y0; y < y1; ++y) {
-        const float normalizedY = (static_cast<float>(y) + 0.5f - desc.center.y) / desc.radiusY;
-        const float inside = 1.f - normalizedY * normalizedY;
-        if (inside < 0.f) {
-            continue;
-        }
-        const float halfWidth = std::sqrt(inside) * desc.radiusX;
-        const int32_t x0 = static_cast<int32_t>(std::floor(desc.center.x - halfWidth));
-        const int32_t x1 = static_cast<int32_t>(std::ceil(desc.center.x + halfWidth));
-        if (x1 > x0) {
-            set.intervals.push_back({y, x0, x1});
+        const float ny = (static_cast<float>(y) + 0.5f - desc.center.y) / desc.radiusY;
+        int32_t runStart = 0;
+        bool inRun = false;
+        for (int32_t x = x0; x <= x1; ++x) {
+            const float nx = (static_cast<float>(x) + 0.5f - desc.center.x) / desc.radiusX;
+            const bool inside = x < x1 && nx * nx + ny * ny <= 1.f;
+            if (inside && !inRun) {
+                runStart = x;
+                inRun = true;
+            } else if (!inside && inRun) {
+                set.intervals.push_back({y, runStart, x});
+                inRun = false;
+            }
         }
     }
 
@@ -733,24 +761,9 @@ IntervalSet rasterizePolygon(const PolygonDesc& desc) {
     for (size_t i = 0; i < n; ++i) {
         const Vec2f& p = desc.vertices[i];
         const Vec2f& q = desc.vertices[(i + 1) % n];
-        int32_t x0 = static_cast<int32_t>(std::floor(p.x));
-        int32_t y0 = static_cast<int32_t>(std::floor(p.y));
-        const int32_t x1 = static_cast<int32_t>(std::floor(q.x));
-        const int32_t y1 = static_cast<int32_t>(std::floor(q.y));
-        const int32_t dx =  std::abs(x1 - x0);
-        const int32_t dy = -std::abs(y1 - y0);
-        const int32_t sx = x0 < x1 ? 1 : -1;
-        const int32_t sy = y0 < y1 ? 1 : -1;
-        int32_t err = dx + dy;
-        while (true) {
-            edges.intervals.push_back({ y0, x0, x0 + 1 });
-            if (x0 == x1 && y0 == y1) {
-                break;
-            }
-            const int32_t e2 = 2 * err;
-            if (e2 >= dy) { err += dy; x0 += sx; }
-            if (e2 <= dx) { err += dx; y0 += sy; }
-        }
+        walkLine(static_cast<int32_t>(std::floor(p.x)), static_cast<int32_t>(std::floor(p.y)),
+                 static_cast<int32_t>(std::floor(q.x)), static_cast<int32_t>(std::floor(q.y)),
+                 [&edges](int32_t x, int32_t y) { edges.intervals.push_back({ y, x, x + 1 }); });
     }
     return unionSets(normalize(std::move(filled)), normalize(std::move(edges)));
 }
@@ -896,6 +909,14 @@ IntervalSet rasterizeArea(const std::vector<Vec2f>& outline, bool bySpans) {
     return normalize(std::move(set));
 }
 
+Mat3f exactGridMove(const Mat3f& matrix) {
+    Mat3f exact = matrix;
+    for (int i : { 0, 1, 2, 3, 4, 5 }) {
+        exact.m[i] = std::round(matrix.m[i]);
+    }
+    return exact;
+}
+
 bool keepsPixelGrid(const Mat3f& matrix) {
     const auto whole = [](float value) { return std::fabs(value - std::round(value)) < 1e-4f; };
     const float a = matrix.m[0], b = matrix.m[1], c = matrix.m[3], d = matrix.m[4];
@@ -941,24 +962,11 @@ namespace {
 // The pixels of a straight run from one pixel to another, both included, in
 // order -- the same Bresenham every pixel tool draws.
 void walkBetween(Vec2i from, Vec2i to, std::vector<Vec2i>& out) {
-    int32_t x0 = from.x;
-    int32_t y0 = from.y;
-    const int32_t dx =  std::abs(to.x - x0);
-    const int32_t dy = -std::abs(to.y - y0);
-    const int32_t sx = x0 < to.x ? 1 : -1;
-    const int32_t sy = y0 < to.y ? 1 : -1;
-    int32_t err = dx + dy;
-    while (true) {
-        if (out.empty() || out.back().x != x0 || out.back().y != y0) {
-            out.push_back({ x0, y0 });
+    walkLine(from.x, from.y, to.x, to.y, [&out](int32_t x, int32_t y) {
+        if (out.empty() || out.back().x != x || out.back().y != y) {
+            out.push_back({ x, y });
         }
-        if (x0 == to.x && y0 == to.y) {
-            break;
-        }
-        const int32_t e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
-    }
+    });
 }
 
 Vec2i pixelOf(Vec2f p) {
@@ -1098,13 +1106,18 @@ std::vector<Vec2i> tipFootprint(const AreaDesc& tip, const Mover* mover, Vec2f a
 // it runs half a pixel up and to the left: that is what lands a line doubled
 // in size exactly on the pixels of the line, doubled. Moved by a map that is
 // not a matrix, the simplified path is cut into half-pixel steps first, so it
-// bends where the map bends.
+// bends where the map bends. A move that keeps the pixel grid -- a quarter
+// turn, a flip, a whole-pixel step -- sends every point to a pixel's centre as
+// exactly as it was on one, so nothing needs reading back: the stroke is the
+// same walk between the same points, where they land.
 PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
     PixelSet pixels;
     if (stroke.points.empty() && stroke.kind != PenKind::Area) {
         return pixels;
     }
     const bool bends = mover != nullptr && mover->matrix == nullptr;
+    const bool reread = mover != nullptr &&
+                        (mover->matrix == nullptr || !keepsPixelGrid(*mover->matrix));
     const auto densified = [bends](std::vector<Vec2f> points, bool closed) {
         return bends ? densifyPath(points, closed) : points;
     };
@@ -1174,7 +1187,7 @@ PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
     for (size_t i = 0; i < from.size(); ++i) {
         from[i] = i;
     }
-    if (mover != nullptr && path.size() > 2 && stroke.sizes.empty()) {
+    if (reread && path.size() > 2 && stroke.sizes.empty()) {
         SimplifyParams params;
         params.epsilon = 0.75f;
         params.preserveCorners = false;
@@ -1204,7 +1217,7 @@ PixelSet strokePixels(const PenStroke& stroke, const Mover* mover) {
         }
     }
     const bool oneWide = !tipped && stroke.sizes.empty() && firstW <= 1 && firstH <= 1;
-    if (mover != nullptr && oneWide && stroke.pixelPerfect) {
+    if (reread && oneWide && stroke.pixelPerfect) {
         walk = withoutCorners(walk);
         walkFrom.assign(walk.size(), 0);
     }
@@ -1331,11 +1344,12 @@ IntervalSet rasterizeStrokes(const StrokesDesc& desc) {
 }
 
 IntervalSet rasterizeStrokesThrough(const StrokesDesc& desc, const Mat3f& matrix) {
-    if (keepsPixelGrid(matrix)) {
-        return mapAcrossGrid(strokesPixels(desc, nullptr), matrix);
-    }
+    // Every move, a quarter turn included, moves the strokes and walks them
+    // again where they land: the math resolved there, never the pixels they
+    // drew elsewhere carried across.
+    const Mat3f exact = keepsPixelGrid(matrix) ? exactGridMove(matrix) : matrix;
     Mover mover;
-    mover.matrix = &matrix;
+    mover.matrix = &exact;
     return strokesPixels(desc, &mover);
 }
 
@@ -1373,13 +1387,13 @@ IntervalSet rasterizeAreaDesc(const AreaDesc& desc) {
 }
 
 IntervalSet rasterizeAreaThrough(const AreaDesc& desc, const Mat3f& matrix) {
-    if (keepsPixelGrid(matrix)) {
-        return mapAcrossGrid(fillContours(desc.contours), matrix);
-    }
+    // The contours moved and filled where they land, by the same rule as
+    // unmoved -- for a quarter turn too.
+    const Mat3f exact = keepsPixelGrid(matrix) ? exactGridMove(matrix) : matrix;
     std::vector<std::vector<Vec2f>> moved = desc.contours;
     for (auto& contour : moved) {
         for (Vec2f& p : contour) {
-            p = matrix.transformPoint(p);
+            p = exact.transformPoint(p);
         }
     }
     return fillContours(moved);

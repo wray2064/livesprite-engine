@@ -106,6 +106,24 @@ cleanup closes notches and drops orphans, and interior gaps are repaired.
 That is why a quarter turn preserves the pixel count exactly, and why a 25°
 turn looks like a pixel artist rotated it rather than like a photograph of one.
 
+What is drawn as shapes -- lines, polygons, curves, boxes, ellipses, pencil
+strokes, traced areas -- is not sampled at all: the move is applied to the
+shape and the shape is drawn where it lands. A quarter turn, a flip or a
+whole-pixel step turns a shape into the same kind of shape (an ellipse into an
+ellipse with its radii swapped), so it is described there exactly and drawn by
+its usual rule; the pixels it drew unmoved are never carried across. That the
+result is exactly the drawing turned is a property of the rules, and each is
+written to have it:
+
+- a point that names a pixel sits in the middle of it (a line's end, a
+  polygon's corner, a pencil's point) -- on a corner it would name four, and a
+  turn could resolve it to another;
+- an ellipse is the pixels whose centres are inside it, the same test on both
+  axes;
+- a line's pixels are the nearest the true line, one per step along its
+  longer axis, and where it passes exactly between two, the one nearer its
+  start -- a rule of the line itself, not of which axis is which.
+
 **Placing a whole sprite is not an operation.** A sprite carries its own
 transform (`setSpriteTransform`, or the composing helpers `translateSprite`,
 `rotateSprite`, `scaleSprite`, `mirrorSprite`). That transform is the single
