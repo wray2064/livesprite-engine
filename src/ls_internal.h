@@ -390,6 +390,15 @@ struct LSContext::Impl {
     // asking each which palette it would actually use is the honest answer.
     void markPaletteDirty(PaletteId palette);
     void invalidateCacheFor(uint64_t entityId);
+    // Drops the compiled assembly of this sprite and of every sprite it hangs
+    // under: each of those pictures has this sprite in it.
+    void dropAssembliesAbove(uint64_t spriteId);
+    // The sprite a socket or a pivot belongs to, dirtied: where a socket sits
+    // or a pivot is decides where the sprite, and what hangs from it, goes.
+    void markAnchorOwnerDirty(SpriteId owner);
+    // The sprite a sprite hangs from, or null: its socket's owner, when the
+    // attachment still names a socket.
+    SpriteId parentOf(SpriteId sprite) const;
 
     // --- boundaries -------------------------------------------------------
     // Memoized: boundaries change rarely and the field costs a few morphology

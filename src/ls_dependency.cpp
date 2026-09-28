@@ -124,6 +124,11 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
         }
         graph.dirty.insert(current);
         invalidateCacheFor(current);
+        // A sprite that changed changes every assembly it is part of, and a
+        // compile of the sprite alone must not hide that from them.
+        if (sprites.count(current) != 0) {
+            dropAssembliesAbove(current);
+        }
         if (current != entityId) {
             auto region = regions.find(current);
             if (region != regions.end() && !region->second.clip.empty()) {
@@ -143,6 +148,31 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
     for (uint64_t id : clipped) {
         refreshRegion(regions.at(id));
     }
+}
+
+void LSContext::Impl::dropAssembliesAbove(uint64_t spriteId) {
+    std::set<uint64_t> seen;
+    for (SpriteId at { spriteId }; at.valid() && seen.insert(at.value).second; at = parentOf(at)) {
+        for (auto it = compileCache.begin(); it != compileCache.end(); ) {
+            it = it->first.entity == at.value && it->first.kind == CacheKind::Assembly
+                ? compileCache.erase(it) : std::next(it);
+        }
+    }
+}
+
+void LSContext::Impl::markAnchorOwnerDirty(SpriteId owner) {
+    if (owner.valid()) {
+        markDirtyInternal(owner.value);
+    }
+}
+
+SpriteId LSContext::Impl::parentOf(SpriteId sprite) const {
+    const SpriteData* data = findSprite(sprite);
+    if (data == nullptr || !data->attached) {
+        return SpriteId::null();
+    }
+    const SocketData* socket = findSocket(data->attachment.socket);
+    return socket != nullptr ? socket->sprite : SpriteId::null();
 }
 
 void LSContext::Impl::invalidateCacheFor(uint64_t entityId) {

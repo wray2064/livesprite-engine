@@ -171,6 +171,10 @@ if (LS_BUILD_TESTS)
     target_link_libraries(livesprite_anchor_tests PRIVATE livesprite)
     add_test(NAME livesprite_anchor COMMAND livesprite_anchor_tests)
 
+    add_executable(livesprite_assembly_tests tests/assembly_tests.cpp)
+    target_link_libraries(livesprite_assembly_tests PRIVATE livesprite)
+    add_test(NAME livesprite_assembly COMMAND livesprite_assembly_tests)
+
     add_executable(livesprite_instruction_tests tests/instruction_tests.cpp)
     target_link_libraries(livesprite_instruction_tests PRIVATE livesprite)
     add_test(NAME livesprite_instruction COMMAND livesprite_instruction_tests)

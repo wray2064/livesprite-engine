@@ -637,34 +637,44 @@ Result<Mat3f> LSContext::Impl::worldTransformOf(SpriteId sprite) const {
     if (data == nullptr) {
         return Result<Mat3f>::err(LSError::InvalidId);
     }
-    if (!data->attached) {
-        return Result<Mat3f>::ok(data->transform);
+    // Up the chain, one link at a time rather than by recursion, so a chain
+    // as long as a document allows resolves, and a loop -- which attaching
+    // refuses and loading drops, but which nothing here may trust -- cannot
+    // run forever: met, it is a broken attachment, and a broken attachment
+    // leaves the sprite standing on its own transform rather than vanishing.
+    // Each link is the parent frame, then the socket, then the joint offset,
+    // then the child pivot brought to the origin, then the child's own
+    // transform.
+    std::vector<Mat3f> links;
+    std::set<uint64_t> seen;
+    Mat3f top;
+    for (SpriteId at = sprite;;) {
+        const SpriteData* link = findSprite(at);
+        if (link == nullptr) {
+            return Result<Mat3f>::err(LSError::InvalidId);
+        }
+        if (!seen.insert(at.value).second) {
+            return Result<Mat3f>::ok(data->transform);
+        }
+        const SocketData* socket = link->attached ? findSocket(link->attachment.socket) : nullptr;
+        const PivotData* pivot = link->attached ? findPivot(link->attachment.childPivot) : nullptr;
+        if (socket == nullptr || pivot == nullptr) {
+            top = link->transform;
+            break;
+        }
+        const Mat3f socketLocal = Mat3f::translation(socket->desc.position)
+                                      .mul(Mat3f::rotation(socket->desc.angle))
+                                      .mul(Mat3f::scaling(socket->desc.scale));
+        links.push_back(socketLocal.mul(link->attachment.localOffset)
+                            .mul(Mat3f::translation({ -pivot->position.x, -pivot->position.y }))
+                            .mul(link->transform));
+        at = socket->sprite;
     }
-
-    const SocketData* socket = findSocket(data->attachment.socket);
-    const PivotData* pivot = findPivot(data->attachment.childPivot);
-    if (socket == nullptr || pivot == nullptr) {
-        // A broken attachment leaves the sprite standing on its own transform
-        // rather than vanishing.
-        return Result<Mat3f>::ok(data->transform);
+    Mat3f world = top;
+    for (auto it = links.rbegin(); it != links.rend(); ++it) {
+        world = world.mul(*it);
     }
-
-    auto parentWorld = worldTransformOf(socket->sprite);
-    if (parentWorld.fail()) {
-        return parentWorld;
-    }
-
-    const Mat3f socketLocal = Mat3f::translation(socket->desc.position)
-                                  .mul(Mat3f::rotation(socket->desc.angle))
-                                  .mul(Mat3f::scaling(socket->desc.scale));
-    // Parent frame, then the socket, then the joint offset, then the child
-    // pivot brought to the origin, and finally the child own transform.
-    return Result<Mat3f>::ok(parentWorld.value
-                                 .mul(socketLocal)
-                                 .mul(data->attachment.localOffset)
-                                 .mul(Mat3f::translation({ -pivot->position.x,
-                                                           -pivot->position.y }))
-                                 .mul(data->transform));
+    return Result<Mat3f>::ok(world);
 }
 
 Result<Mat3f> LSContext::Impl::placementOf(SpriteId sprite) const {
@@ -4200,7 +4210,7 @@ VoidResult LSContext::rotateSprite(SpriteId sprite, float angleDeg, PivotId pivo
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
-    const Vec2f about = pivotPointOf(*impl_, sprite, pivot);
+    const Vec2f about = data->transform.transformPoint(pivotPointOf(*impl_, sprite, pivot));
     data->transform = Mat3f::aroundPivot(Mat3f::rotation(angleDeg), about).mul(data->transform);
     impl_->markDirtyInternal(sprite.value);
     return VoidResult::success();
@@ -4214,7 +4224,7 @@ VoidResult LSContext::scaleSprite(SpriteId sprite, Vec2f factor, PivotId pivot) 
     if (factor.x == 0.f || factor.y == 0.f) {
         return VoidResult::err(LSError::InvalidParameter);
     }
-    const Vec2f about = pivotPointOf(*impl_, sprite, pivot);
+    const Vec2f about = data->transform.transformPoint(pivotPointOf(*impl_, sprite, pivot));
     data->transform = Mat3f::aroundPivot(Mat3f::scaling(factor), about).mul(data->transform);
     impl_->markDirtyInternal(sprite.value);
     return VoidResult::success();
@@ -4225,7 +4235,7 @@ VoidResult LSContext::mirrorSprite(SpriteId sprite, MirrorAxis axis, PivotId piv
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
-    const Vec2f about = pivotPointOf(*impl_, sprite, pivot);
+    const Vec2f about = data->transform.transformPoint(pivotPointOf(*impl_, sprite, pivot));
     const Vec2f factor {
         axis == MirrorAxis::Y ? 1.f : -1.f,
         axis == MirrorAxis::X ? 1.f : -1.f
@@ -4304,11 +4314,28 @@ VoidResult LSContext::placePivot(PivotId id, PivotPlacement placement,
         data->position = { static_cast<float>(document->canvasWidth) * 0.5f,
                            static_cast<float>(document->canvasHeight) * 0.5f };
         impl_->markDirtyInternal(id.value);
+        impl_->markAnchorOwnerDirty(data->sprite);
         return VoidResult::success();
     }
 
-    // Content placements need to know what the sprite actually draws.
-    auto bounds = compileBoundsOnly(data->sprite, profile);
+    // Content placements need to know what the sprite actually draws -- in
+    // its own space, where the pivot is: a sprite standing somewhere else has
+    // its own transform undone for the measuring.
+    Result<Rect2i> bounds = Result<Rect2i>::err(LSError::InvalidId);
+    auto undo = sprite->transform.inverse();
+    bool standsStill = true;
+    for (int i = 0; i < 9; ++i) {
+        standsStill = standsStill && std::fabs(sprite->transform.m[i] - Mat3f{}.m[i]) <= 1e-5f;
+    }
+    if (standsStill || undo.fail()) {
+        bounds = compileBoundsOnly(data->sprite, profile);
+    } else {
+        CompileProfile boundsProfile = profile;
+        boundsProfile.type = CompileProfileType::BoundsOnly;
+        auto measured = compileSpriteWithin(data->sprite, boundsProfile, &undo.value);
+        bounds = measured.ok() ? Result<Rect2i>::ok(measured.value.bounds)
+                               : Result<Rect2i>::err(measured.error);
+    }
     if (bounds.fail()) {
         return VoidResult::err(bounds.error);
     }
@@ -4338,6 +4365,7 @@ VoidResult LSContext::placePivot(PivotId id, PivotPlacement placement,
             break;
     }
     impl_->markDirtyInternal(id.value);
+    impl_->markAnchorOwnerDirty(data->sprite);
     return VoidResult::success();
 }
 
@@ -4346,6 +4374,14 @@ VoidResult LSContext::deletePivot(PivotId id) {
     if (data == nullptr) {
         return VoidResult::err(LSError::InvalidId);
     }
+    // The pivot a sprite presents to its socket is how it hangs: without it
+    // the sprite comes off, as it does when the socket goes.
+    if (const SpriteData* owner = impl_->findSprite(data->sprite)) {
+        if (owner->attached && owner->attachment.childPivot == id) {
+            detachSprite(data->sprite);
+        }
+    }
+    impl_->markAnchorOwnerDirty(data->sprite);
     if (SpriteData* sprite = impl_->findSprite(data->sprite)) {
         sprite->pivots.erase(std::remove(sprite->pivots.begin(), sprite->pivots.end(), id),
                              sprite->pivots.end());
@@ -4365,6 +4401,7 @@ VoidResult LSContext::setPivot(PivotId id, Vec2f position) {
     }
     data->position = position;
     impl_->markDirtyInternal(id.value);
+    impl_->markAnchorOwnerDirty(data->sprite);
     return VoidResult::success();
 }
 
@@ -4384,6 +4421,7 @@ VoidResult LSContext::movePivot(PivotId id, Vec2f delta) {
     data->position.x += delta.x;
     data->position.y += delta.y;
     impl_->markDirtyInternal(id.value);
+    impl_->markAnchorOwnerDirty(data->sprite);
     return VoidResult::success();
 }
 
@@ -4441,6 +4479,7 @@ VoidResult LSContext::moveSocket(SocketId id, Vec2f position) {
     }
     data->desc.position = position;
     impl_->markDirtyInternal(id.value);
+    impl_->markAnchorOwnerDirty(data->sprite);
     return VoidResult::success();
 }
 
@@ -4451,6 +4490,7 @@ VoidResult LSContext::rotateSocket(SocketId id, float angleDeg) {
     }
     data->desc.angle = angleDeg;
     impl_->markDirtyInternal(id.value);
+    impl_->markAnchorOwnerDirty(data->sprite);
     return VoidResult::success();
 }
 
@@ -4464,6 +4504,7 @@ VoidResult LSContext::setSocketScale(SocketId id, Vec2f scale) {
     }
     data->desc.scale = scale;
     impl_->markDirtyInternal(id.value);
+    impl_->markAnchorOwnerDirty(data->sprite);
     return VoidResult::success();
 }
 
@@ -4605,22 +4646,29 @@ VoidResult LSContext::attachSprite(SpriteId child, const AttachmentDesc& request
     if (socket->sprite == child) {
         return VoidResult::err(LSError::DependencyCycle);
     }
+    // An assembly is one document's sprites.
+    const SpriteData* parentData = impl_->findSprite(socket->sprite);
+    if (parentData == nullptr || parentData->document != childData->document) {
+        return VoidResult::err(LSError::InvalidParameter);
+    }
 
-    // Walk up from the prospective parent: meeting the child means this
-    // attachment would close a loop.
-    SpriteId ancestor = socket->sprite;
-    for (int guard = 0; guard < 1024 && ancestor.valid(); ++guard) {
+    // Walk up from the prospective parent, all the way: meeting the child
+    // means this attachment would close a loop. (Nothing already attached
+    // loops, so the walk ends; the set is for a graph that was not built
+    // here.)
+    std::set<uint64_t> walked;
+    for (SpriteId ancestor = socket->sprite; ancestor.valid() && walked.insert(ancestor.value).second;
+         ancestor = impl_->parentOf(ancestor)) {
         if (ancestor == child) {
             return VoidResult::err(LSError::DependencyCycle);
         }
-        const SpriteData* data = impl_->findSprite(ancestor);
-        if (data == nullptr || !data->attached) {
-            break;
-        }
-        const SocketData* parentSocket = impl_->findSocket(data->attachment.socket);
-        ancestor = parentSocket == nullptr ? SpriteId::null() : parentSocket->sprite;
     }
 
+    // Hung from somewhere else before: that assembly loses it.
+    const SpriteId previousParent = impl_->parentOf(child);
+    if (previousParent.valid()) {
+        impl_->markDirtyInternal(previousParent.value);
+    }
     childData->attachment = desc;
     childData->attached = true;
     impl_->addDependencyEdge(socket->sprite.value, child.value);

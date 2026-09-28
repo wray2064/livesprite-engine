@@ -1474,6 +1474,34 @@ Result<DocumentId> loadDocument(LSContext::Impl& impl, const SerializedData& dat
         }
     }
 
+    // An attachment read from a file is only kept if attaching it here would
+    // have been allowed: a socket that exists, on a sprite of this document;
+    // a pivot that belongs to the child; no loop. Anything else is a sprite
+    // standing on its own -- a file cannot build a graph the API refuses, and
+    // a loop in one would never finish resolving.
+    for (SpriteId child : stored.sprites) {
+        SpriteData* hanging = impl.findSprite(child);
+        if (hanging == nullptr || !hanging->attached) {
+            continue;
+        }
+        const SocketData* socket = impl.findSocket(hanging->attachment.socket);
+        const PivotData* pivot = impl.findPivot(hanging->attachment.childPivot);
+        const SpriteData* parent = socket != nullptr ? impl.findSprite(socket->sprite) : nullptr;
+        bool keep = parent != nullptr && pivot != nullptr && pivot->sprite == child &&
+                    socket->sprite != child && parent->document == hanging->document;
+        std::set<uint64_t> walked;
+        for (SpriteId up = keep ? socket->sprite : SpriteId::null();
+             keep && up.valid() && walked.insert(up.value).second; up = impl.parentOf(up)) {
+            keep = up != child;
+        }
+        if (!keep) {
+            hanging->attached = false;
+            hanging->attachment = AttachmentDesc{};
+            continue;
+        }
+        impl.addDependencyEdge(socket->sprite.value, child.value);
+    }
+
     if (const json::Value* metadata = root.find("metadata")) {
         for (const auto& [entityText, entity] : metadata->members()) {
             if (!entity.isObject()) {
