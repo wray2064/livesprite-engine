@@ -506,6 +506,31 @@ void testACloneCarriesItsAnchors() {
     LS_CHECK(ctx->findPivot(copy.value, "hilt").ok());
 }
 
+
+// The question a view asks before compiling an assembly again.
+void testAnAssemblyKnowsWhenItIsCurrent() {
+    auto ctx = LSContext::create();
+    const Rig r = makeRig(*ctx);
+    LS_CHECK(!ctx->isAssemblyCurrent(r.body, profile()));
+    assembled(*ctx, r.body);
+    LS_CHECK(ctx->isAssemblyCurrent(r.body, profile()));
+    // Compiling a part alone -- which clears its dirty mark -- changes nothing.
+    ctx->compileSprite(r.gem, profile());
+    LS_CHECK(ctx->isAssemblyCurrent(r.body, profile()));
+    // A change anywhere in it does, however deep.
+    ctx->setPivot(r.gemRoot, { 1.f, 1.f });
+    ctx->compileSprite(r.gem, profile());
+    LS_CHECK(!ctx->isAssemblyCurrent(r.body, profile()));
+    assembled(*ctx, r.body);
+    LS_CHECK(ctx->isAssemblyCurrent(r.body, profile()));
+    AttachmentDesc turned;
+    turned.socket = r.pommel;
+    turned.childPivot = r.gemRoot;
+    turned.localOffset = Mat3f::rotation(30.f);
+    ctx->attachSprite(r.gem, turned);
+    LS_CHECK(!ctx->isAssemblyCurrent(r.body, profile()));
+}
+
 } // namespace
 
 int main() {
@@ -525,6 +550,7 @@ int main() {
     testBehindIsABranchOrder();
     testTheGraphSurvivesSaveAndLoad();
     testACloneCarriesItsAnchors();
+    testAnAssemblyKnowsWhenItIsCurrent();
     // Last: where a loop is not caught, what follows it never finishes.
     testALongChainCannotCloseALoop();
     return lstest::report("assembly");

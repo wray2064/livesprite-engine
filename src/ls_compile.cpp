@@ -4187,6 +4187,22 @@ Result<CompileResult> LSContext::compileSpriteWithin(SpriteId id, const CompileP
     return Result<CompileResult>::ok(result);
 }
 
+bool LSContext::isAssemblyCurrent(SpriteId root, const CompileProfile& profile) const {
+    const SpriteData* rootData = impl_->findSprite(root);
+    if (rootData == nullptr) {
+        return false;
+    }
+    CacheKey key;
+    key.entity = root.value;
+    key.profileHash = impl_->hashProfile(impl_->resolveProfileDefaults(profile, rootData->document));
+    key.resourceRevision = impl_->resourceRevision;
+    key.engineVersion = LS_ENGINE_VERSION;
+    key.kind = CacheKind::Assembly;
+    // A change to any sprite in it drops the assembly compiled (see
+    // dropAssembliesAbove), so its still being there is the answer.
+    return impl_->compileCache.count(key) != 0;
+}
+
 Result<CompileResult> LSContext::compileAssembly(SpriteId root, const CompileProfile& profile) {
     const SpriteData* rootData = impl_->findSprite(root);
     if (rootData == nullptr) {

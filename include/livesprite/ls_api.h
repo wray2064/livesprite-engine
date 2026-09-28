@@ -839,6 +839,12 @@ public:
     // Compile the whole assembly: each sprite compiled from its own operations,
     // then placed by the attachment chain.
     Result<CompileResult> compileAssembly(SpriteId root, const CompileProfile& profile);
+    // Whether the assembly last compiled under root with this profile is
+    // still what compileAssembly would give: nothing in it has changed since.
+    // What a view showing an assembly asks before compiling it again, as
+    // isDirty is for one sprite -- which cannot answer this, since a sprite
+    // compiled on its own is no longer dirty.
+    bool isAssemblyCurrent(SpriteId root, const CompileProfile& profile) const;
 
     Result<BoundaryId>  createBoundary(SpriteId sprite, const BoundaryDesc& desc);
     VoidResult          deleteBoundary(BoundaryId id);
