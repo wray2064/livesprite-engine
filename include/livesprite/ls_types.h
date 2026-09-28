@@ -353,6 +353,10 @@ enum class RoundingPolicy : uint8_t {
     Ceil,
     Truncate,
     SubpixelHalf,
+    // The translation as it is: a move that must land exactly where the same
+    // placement lands elsewhere -- a puppet part captured into a frame lands
+    // where the assembly drew it.
+    Exact,
 };
 
 enum class SamplingPolicy : uint8_t {

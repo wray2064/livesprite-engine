@@ -372,6 +372,7 @@ Mat3f applyRounding(const Mat3f& matrix, RoundingPolicy rounding) {
             case RoundingPolicy::Ceil:         return std::ceil(value);
             case RoundingPolicy::Truncate:     return std::trunc(value);
             case RoundingPolicy::SubpixelHalf: return std::round(value * 2.f) * 0.5f;
+            case RoundingPolicy::Exact:        return value;
         }
         return value;
     };
