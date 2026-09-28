@@ -194,6 +194,30 @@ where the chain puts it, so an articulated figure renders in one call. The
 placement is the last move each of its marks takes, so a sprite its parent
 turns is drawn turned rather than drawn and then turned as a picture.
 
+What the graph promises (`assembly_tests`):
+
+- **Every edit reaches a compiled assembly.** Moving, turning or scaling a
+  socket, and moving or placing a pivot, dirty the sprite they belong to, and
+  that spreads down the chain; a sprite that changes drops the compiled
+  assembly of every sprite it hangs under -- even when the sprite alone was
+  compiled in between.
+- **The graph's edges are kept.** Hanging a sprite from another socket takes
+  it out of the assembly it was in. Removing a socket, deleting the pivot a
+  sprite hangs by, or deleting a sprite lets go of what hung there. A socket
+  and a child must be in the same document.
+- **No loops, anywhere.** Attaching walks the whole chain above the socket; a
+  file whose attachments break these rules (a loop, a missing or foreign
+  pivot, another document's socket) loads with those sprites standing on
+  their own; and resolving a chain goes up it a link at a time, treating a
+  loop it meets as a broken attachment, so no graph can hang it.
+- **Turning about a pivot keeps the pivot.** `rotateSprite`, `scaleSprite`
+  and `mirrorSprite` turn about where the sprite's own transform puts the
+  pivot, and `placePivot` measures the drawing in the sprite's own space, so
+  a sprite standing somewhere else gets the same pivot on the same drawing.
+- **Quarter turns and mirrors of a whole assembly are exact** when its
+  sockets and pivots sit on the pixel grid, and undo, save and load carry the
+  graph whole.
+
 ## Dependencies and caching
 
 The engine maintains a dependency graph: change a geometry and the regions built
