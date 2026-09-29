@@ -151,8 +151,11 @@ void LSContext::Impl::markDirtyInternal(uint64_t entityId) {
 }
 
 void LSContext::Impl::dropAssembliesAbove(uint64_t spriteId) {
-    std::set<uint64_t> seen;
-    for (SpriteId at { spriteId }; at.valid() && seen.insert(at.value).second; at = parentOf(at)) {
+    // The sprite's own entries, its assembly among them, went with
+    // invalidateCacheFor; the chain above it is what is left.
+    std::set<uint64_t> seen { spriteId };
+    for (SpriteId at = parentOf(SpriteId{ spriteId }); at.valid() && seen.insert(at.value).second;
+         at = parentOf(at)) {
         for (auto it = compileCache.begin(); it != compileCache.end(); ) {
             it = it->first.entity == at.value && it->first.kind == CacheKind::Assembly
                 ? compileCache.erase(it) : std::next(it);

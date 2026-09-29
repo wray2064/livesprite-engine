@@ -1240,6 +1240,12 @@ IntervalSet faceThrough(const CompileEnv& env, const FaceDesc& face, const MarkM
     // undrawn. (Undrawn only: a face flooded over a colour already there has
     // that colour inside the lines and nothing outside them, and following
     // the colour too would join the two.)
+    // Mostly the flood reaches every pixel of the area it could fill, and
+    // there is no pocket to look for.
+    if (geom::subtractSets(geom::fillableIn(*current, seedPixel, face.tolerance, area), found)
+            .empty()) {
+        return found;
+    }
     const Rect2i box = geom::bounds(limit);
     const Rect2i frame { { box.min.x - 1, box.min.y - 1 }, { box.max.x + 1, box.max.y + 1 } };
     const IntervalSet open = geom::fillableIn(*current, { -1, -1 }, 0,
