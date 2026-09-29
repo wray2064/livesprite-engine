@@ -1734,6 +1734,42 @@ bool cutStrokes(StrokesDesc& desc, const IntervalSet& erased) {
     return wideTouched;
 }
 
+IntervalSet fillableIn(const RasterBuffer& raster, Vec2i seed, int32_t tolerance,
+                       const IntervalSet& area) {
+    IntervalSet out;
+    const int32_t width = static_cast<int32_t>(raster.width);
+    const int32_t height = static_cast<int32_t>(raster.height);
+    if (raster.pixels.size() < static_cast<size_t>(raster.stride) * raster.height) {
+        return out;
+    }
+    const bool seeded = seed.x >= 0 && seed.y >= 0 && seed.x < width && seed.y < height;
+    const Color wanted = seeded ? rasterAt(raster, seed.x, seed.y) : Color::transparent();
+    for (const Interval& run : area.intervals) {
+        if (run.y < 0 || run.y >= height) {
+            continue;
+        }
+        int32_t start = 0;
+        bool open = false;
+        const int32_t x0 = std::max(run.x0, 0);
+        const int32_t x1 = std::min(run.x1, width);
+        for (int32_t x = x0; x <= x1; ++x) {
+            bool fillable = false;
+            if (x < x1) {
+                const Color c = rasterAt(raster, x, run.y);
+                fillable = c.a == 0 || (seeded && coloursWithin(c, wanted, tolerance));
+            }
+            if (fillable && !open) {
+                start = x;
+                open = true;
+            } else if (!fillable && open) {
+                out.intervals.push_back({ run.y, start, x });
+                open = false;
+            }
+        }
+    }
+    return normalize(std::move(out));
+}
+
 IntervalSet floodRaster(const RasterBuffer& raster, Vec2i seed, int32_t tolerance, bool diagonal,
                         const IntervalSet* within) {
     const int32_t width = static_cast<int32_t>(raster.width);

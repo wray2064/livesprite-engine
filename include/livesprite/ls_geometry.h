@@ -360,6 +360,11 @@ Vec2f deepestPoint(const IntervalSet& set);
 // way; true when one lay under the pixels, for the caller to add an erasing
 // mark over it.
 bool cutStrokes(StrokesDesc& desc, const IntervalSet& erased);
+// The pixels of `area` a flood from `seed` over the picture could fill --
+// undrawn, or within `tolerance` of the seed's colour -- whether the flood
+// would reach them or not.
+IntervalSet fillableIn(const RasterBuffer& raster, Vec2i seed, int32_t tolerance,
+                       const IntervalSet& area);
 // A flood over a picture from `seed`: the connected pixels whose colour is
 // within `tolerance` of the seed's. Kept inside `within` when it is given.
 IntervalSet floodRaster(const RasterBuffer& raster, Vec2i seed, int32_t tolerance, bool diagonal,

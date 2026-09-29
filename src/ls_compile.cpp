@@ -1222,13 +1222,45 @@ IntervalSet faceThrough(const CompileEnv& env, const FaceDesc& face, const MarkM
     const IntervalSet reach = geom::expand(area, 2.f, true);
     const IntervalSet limit = geom::expand(area, 3.f, true);
     const Vec2f seed = move.apply(face.seed);
-    const IntervalSet found = geom::floodRaster(
-        *current, { static_cast<int32_t>(std::floor(seed.x)), static_cast<int32_t>(std::floor(seed.y)) },
-        face.tolerance, face.diagonal, &limit);
+    const Vec2i seedPixel { static_cast<int32_t>(std::floor(seed.x)),
+                            static_cast<int32_t>(std::floor(seed.y)) };
+    const IntervalSet found = geom::floodRaster(*current, seedPixel, face.tolerance, face.diagonal,
+                                                &limit);
     if (found.empty() || !geom::subtractSets(found, reach).empty()) {
         return area;
     }
-    return found;
+    // The flood takes the face up to the lines round it, however they were
+    // redrawn -- and never leaves out a pocket of its own area the lines
+    // close in. A thin face (a limb) turned has its lines redrawn at the
+    // angle, and where the two sides come within a pixel they can pinch it
+    // into pockets the seed's flood does not reach: a pocket left undrawn is
+    // a hole in the fill, showing whatever is under it. What of its area is
+    // open to the world beyond the lines -- reached from the edge of where
+    // the face could be, over undrawn pixels -- is outside them, and stays
+    // undrawn. (Undrawn only: a face flooded over a colour already there has
+    // that colour inside the lines and nothing outside them, and following
+    // the colour too would join the two.)
+    const Rect2i box = geom::bounds(limit);
+    const Rect2i frame { { box.min.x - 1, box.min.y - 1 }, { box.max.x + 1, box.max.y + 1 } };
+    const IntervalSet open = geom::fillableIn(*current, { -1, -1 }, 0,
+                                              geom::invertSet(IntervalSet{}, frame));
+    // Each pocket as the seed's own flood would have it: every pixel it could
+    // fill, up to the lines, within the same reach of the face's area.
+    IntervalSet enclosed = geom::fillableIn(*current, seedPixel, face.tolerance, reach);
+    for (const IntervalSet& piece : geom::connectedComponents(open, face.diagonal)) {
+        const Rect2i spans = geom::bounds(piece);
+        if (spans.min.x <= frame.min.x || spans.min.y <= frame.min.y ||
+            spans.max.x >= frame.max.x || spans.max.y >= frame.max.y) {
+            enclosed = geom::subtractSets(enclosed, piece);
+        }
+    }
+    IntervalSet out = found;
+    for (const IntervalSet& pocket : geom::connectedComponents(enclosed, face.diagonal)) {
+        if (!geom::intersectSets(pocket, area).empty()) {
+            out = geom::unionSets(out, pocket);
+        }
+    }
+    return out;
 }
 
 // A region where a move lands it. A region made from a shape is the shape,

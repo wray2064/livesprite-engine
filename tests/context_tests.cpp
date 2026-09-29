@@ -1528,6 +1528,124 @@ void testErasingAShapeKeepsItAShape(LSContext& ctx) {
     LS_CHECK(!geom::contains(ctx.getRegionIntervals(box).value, {20, 20}));
 }
 
+
+// A thin face turned: a limb drawn as a pencil ring two pixels wide inside,
+// filled with a face walled in by nothing (a fill poured over a colour
+// already there floods the line too, so nothing walls it). Turned, its line
+// is redrawn at the angle, and where the ring's two sides come within a
+// pixel they pinch the inside into pockets the seed's flood cannot reach.
+// Every pocket of the face's own area is still the face's: no pixel inside
+// the turned limb is left undrawn.
+void testAThinFaceTurnsWithoutPockets(LSContext& ctx) {
+    constexpr int kSize = 64;
+    const Color skin {238, 208, 160, 255};
+    auto doc = ctx.createDocument({"limb", kSize, kSize});
+    auto sprite = ctx.createSprite(doc.value);
+    auto layer = ctx.createLayer(sprite.value, {"limb"});
+
+    // The ring through pixel middles: down one side, across, up the other.
+    PenStroke ring;
+    const auto walk = [&ring](Vec2i a, Vec2i b) {
+        const int steps = std::max(std::abs(b.x - a.x), std::abs(b.y - a.y));
+        for (int i = 0; i <= steps; ++i) {
+            const float t = steps == 0 ? 0.f : static_cast<float>(i) / static_cast<float>(steps);
+            ring.points.push_back({ std::floor(a.x + (b.x - a.x) * t + 0.5f) + 0.5f,
+                                    std::floor(a.y + (b.y - a.y) * t + 0.5f) + 0.5f });
+        }
+    };
+    walk({ 26, 8 }, { 34, 56 });
+    walk({ 34, 56 }, { 37, 56 });
+    walk({ 37, 56 }, { 29, 8 });
+    walk({ 29, 8 }, { 26, 8 });
+    StrokesDesc pencil;
+    pencil.strokes.push_back(ring);
+
+    // Its inside, as a bucket poured into it finds it.
+    std::vector<uint8_t> wall(kSize * kSize, 0);
+    for (const Interval& run : geom::rasterizeStrokes(pencil).intervals) {
+        for (int32_t x = run.x0; x < run.x1; ++x) {
+            wall[run.y * kSize + x] = 1;
+        }
+    }
+    IntervalSet inside;
+    std::vector<Vec2i> stack { { 31, 32 } };
+    while (!stack.empty()) {
+        const Vec2i p = stack.back();
+        stack.pop_back();
+        if (p.x < 0 || p.y < 0 || p.x >= kSize || p.y >= kSize || wall[p.y * kSize + p.x]) {
+            continue;
+        }
+        wall[p.y * kSize + p.x] = 1;
+        inside.intervals.push_back({ p.y, p.x, p.x + 1 });
+        stack.push_back({p.x + 1, p.y}); stack.push_back({p.x - 1, p.y});
+        stack.push_back({p.x, p.y + 1}); stack.push_back({p.x, p.y - 1});
+    }
+    inside = geom::normalize(inside);
+    LS_REQUIRE(geom::pixelCount(inside) > 60);
+    FaceDesc face;
+    face.area = geom::traceArea(inside);
+    face.seed = geom::deepestPoint(inside);
+
+    FillSolidOp line;
+    line.targetRegion = ctx.createRegionFromGeometry(ctx.createStrokes(doc.value, pencil).value).value;
+    line.fallbackColor = skin;
+    LS_REQUIRE(ctx.addOperation(layer.value, line).ok());
+    FillSolidOp fill;
+    fill.targetRegion = ctx.createRegionFromGeometry(ctx.createFace(doc.value, face).value).value;
+    fill.fallbackColor = skin;
+    LS_REQUIRE(ctx.addOperation(layer.value, fill).ok());
+    RotateOp turn;
+    turn.targetLayer = layer.value;
+    turn.pivotFallback = { 32.f, 32.f };
+    auto turnOp = ctx.addOperation(layer.value, turn);
+    LS_REQUIRE(turnOp.ok());
+
+    CompileProfile profile;
+    profile.type = CompileProfileType::Export;
+    profile.outputWidth = kSize;
+    profile.outputHeight = kSize;
+    profile.palette = PalettePolicy::Unconstrained;
+    // Undrawn pixels a 4-connected walk from the border does not reach.
+    const auto holes = [&](const RasterBuffer& raster) {
+        std::vector<uint8_t> outside(kSize * kSize, 0);
+        std::vector<Vec2i> todo;
+        for (int i = 0; i < kSize; ++i) {
+            todo.push_back({ i, 0 }); todo.push_back({ i, kSize - 1 });
+            todo.push_back({ 0, i }); todo.push_back({ kSize - 1, i });
+        }
+        while (!todo.empty()) {
+            const Vec2i p = todo.back();
+            todo.pop_back();
+            if (p.x < 0 || p.y < 0 || p.x >= kSize || p.y >= kSize) { continue; }
+            const int at = p.y * kSize + p.x;
+            if (outside[at] || readPixel(raster, p.x, p.y).a != 0) { continue; }
+            outside[at] = 1;
+            todo.push_back({p.x + 1, p.y}); todo.push_back({p.x - 1, p.y});
+            todo.push_back({p.x, p.y + 1}); todo.push_back({p.x, p.y - 1});
+        }
+        int count = 0;
+        for (int i = 0; i < kSize * kSize; ++i) {
+            count += !outside[i] && readPixel(raster, i % kSize, i / kSize).a == 0 ? 1 : 0;
+        }
+        return count;
+    };
+    int total = 0;
+    int broken = 0;
+    for (int angle = 0; angle < 360; angle += 2) {
+        turn.angleDegrees = static_cast<float>(angle);
+        LS_REQUIRE(ctx.updateOperation(turnOp.value, turn).ok());
+        auto compiled = ctx.compileSprite(sprite.value, profile);
+        LS_REQUIRE(compiled.ok());
+        const int found = holes(compiled.value.raster);
+        total += found;
+        broken += found != 0 ? 1 : 0;
+    }
+    if (total != 0) {
+        std::printf("    thin face: %d undrawn pixel(s) inside over %d of 180 angles\n", total, broken);
+    }
+    LS_CHECK(total == 0);
+}
+
 int main() {
     auto ctx = LSContext::create();
     LS_REQUIRE_MAIN(ctx != nullptr);
@@ -1552,6 +1670,7 @@ int main() {
     testRegionClips(*ctx);
     testFacesBetweenWalls(*ctx);
     testErasingALineTakesOnlyTheLine(*ctx);
+    testAThinFaceTurnsWithoutPockets(*ctx);
 
     return lstest::report("context");
 }
