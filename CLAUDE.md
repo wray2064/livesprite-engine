@@ -1,9 +1,9 @@
 # LiveSprite engine — working here
 
-This is the engine under Sprit's'fast (`../sprits-fast`) and Sprit's'pract
-(`../sprits-pract`). The handoff for all three -- the decisions that govern
-them, the state, what comes next and the traps -- is
-`../sprits-fast/docs/handoff.md`. Read it first.
+This is the engine under Sprit's'fast (the sibling checkout `../sprits-fast`)
+and Sprit's'pract. `../sprits-fast/docs/handoff.md` covers the code as Fast
+uses it, and the traps. When the workspace's own `../HANDOFF.md` is there, it
+covers the plan across all three projects. Read them first.
 
 Here:
 
