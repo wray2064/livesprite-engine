@@ -16,3 +16,4 @@ CMakeCache.txt
 CMakeFiles/
 .ninja_deps
 .ninja_log
+imgui.ini

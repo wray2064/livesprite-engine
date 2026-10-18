@@ -93,10 +93,10 @@ examples/             the worked example the documentation quotes
 ## Status
 
 Feature-complete against the spec, with the deviations recorded in the spec
-documents themselves. Thirteen test suites cover geometry, entity storage,
-compilation, dithering, anchors, rendering controls, live instructions,
-serialization, packaging, editing support, plugins, cross-platform determinism,
-and the C ABI.
+documents themselves. Nineteen test suites cover geometry, entity storage,
+compilation, dithering, anchors and assemblies, frames, outlines, rendering
+controls, live instructions, palettes, serialization, packaging, editing
+support, plugins, limits, cross-platform determinism, and the C ABI.
 
 Known limits are listed in [performance and limits](docs/performance-and-limits.md)
 rather than left for you to discover.
